@@ -1,7 +1,11 @@
 // Input + selection layer (req §2.6, §4.4, §6.5, §20). Translates raw browser
-// events into camera movement, unit selection (click / drag-box), and move
-// commands (right-click). Selection and camera are view state held here, not in
-// the simulation; commands are the only thing handed to the sim.
+// events into camera movement, unit/building selection (click / drag-box), and
+// commands (move, gather, build, repair, demolish, craft, train).
+//
+// Selection and camera are view state held here, not in the simulation;
+// commands are the only thing handed to the sim. Building selection is single-
+// pick: clicking a building tile picks that building; clicking elsewhere or on
+// a unit re-routes to the unit-selection path.
 
 import {
   CAMERA_PAN_PX_PER_SEC,
@@ -9,7 +13,9 @@ import {
   EDGE_SCROLL_MARGIN_PX,
   TILE_SIZE,
 } from "../config/index.js";
-import type { Command } from "../game/commands.js";
+import { placementValid } from "../game/actions.js";
+import { buildingAt, type Building } from "../game/buildings.js";
+import type { BuildableKind, Command } from "../game/commands.js";
 import { fieldAt } from "../game/fields.js";
 import { HAMLET_CENTER, inBounds, tileAt } from "../game/map.js";
 import type { GameState } from "../game/state.js";
@@ -19,6 +25,7 @@ import {
   screenToTile,
   type Camera,
   type DragBox,
+  type PlacementGhost,
   type View,
 } from "./camera.js";
 
@@ -43,6 +50,16 @@ const PAN_KEYS: Record<string, readonly [number, number]> = {
   KeyS: [0, 1],
 };
 
+// Digit → buildable kind (req §7.1, M3 input). Digit 1 = House, ... 6 = Hay.
+const PLACEMENT_KEYS: Record<string, BuildableKind> = {
+  Digit1: "house",
+  Digit2: "barn",
+  Digit3: "smithy",
+  Digit4: "barracks",
+  Digit5: "mine",
+  Digit6: "hayField",
+};
+
 export interface Controls {
   update: (dtSec: number) => void; // advance camera from pan/edge-scroll
   getView: () => View;
@@ -61,6 +78,8 @@ export function createControls(opts: {
   let viewH = canvas.clientHeight || 1;
   let camera: Camera = centerOnTile(HAMLET_CENTER, viewW, viewH);
   let selection: number[] = [];
+  let selectedBuilding: number | null = null;
+  let placementKind: BuildableKind | null = null;
 
   const held = new Set<string>();
   const mouse = { x: 0, y: 0, inside: false };
@@ -84,6 +103,7 @@ export function createControls(opts: {
     let best: number | null = null;
     let bestD = (TILE_SIZE * 0.5) ** 2;
     for (const u of Object.values(getState().units)) {
+      if (u.insideBuildingId !== null) continue;
       const cx = (u.x + 0.5) * TILE_SIZE;
       const cy = (u.y + 0.5) * TILE_SIZE;
       const d = (cx - wx) ** 2 + (cy - wy) ** 2;
@@ -105,7 +125,13 @@ export function createControls(opts: {
     if (!inBounds(s.map, tx, ty)) return null;
     const ids = [...selection];
     const t = tileAt(s.map, tx, ty);
-    if (t === "forest" || t === "mountain" || t === "water") {
+    const b = buildingAt(s.buildings, tx, ty);
+    // Right-clicking a built mine that the unit can mine: route as `gather`
+    // (the sim resolves it). For any other own-building, fall through to move.
+    if (b && b.kind === "mine") {
+      return { type: "gather", unitIds: ids, tx, ty };
+    }
+    if (t === "forest" || t === "water") {
       return { type: "gather", unitIds: ids, tx, ty };
     }
     const f = fieldAt(s.fields, tx, ty);
@@ -123,11 +149,42 @@ export function createControls(opts: {
     const y1 = Math.max(drag.startY, drag.curY) + camera.y;
     const ids: number[] = [];
     for (const u of Object.values(getState().units)) {
+      if (u.insideBuildingId !== null) continue;
       const cx = (u.x + 0.5) * TILE_SIZE;
       const cy = (u.y + 0.5) * TILE_SIZE;
       if (cx >= x0 && cx <= x1 && cy >= y0 && cy <= y1) ids.push(u.id);
     }
     selection = ids;
+    if (ids.length > 0) selectedBuilding = null;
+  }
+
+  function leftClickResolved(tx: number, ty: number, screenX: number, screenY: number): void {
+    // Placement mode wins: a left-click in placement mode places the building.
+    if (placementKind) {
+      const s = getState();
+      if (placementValid(s.map, s.buildings, s.fields, placementKind, tx, ty)) {
+        enqueue({ type: "build", unitIds: [...selection], kind: placementKind, tx, ty });
+      }
+      placementKind = null; // one-shot; press the key again to place more
+      return;
+    }
+    // Unit click first — most precise.
+    const id = unitAtScreen(screenX, screenY);
+    if (id !== null) {
+      selection = [id];
+      selectedBuilding = null;
+      return;
+    }
+    // Building click: pick the building under the tile (if any).
+    const b = buildingAt(getState().buildings, tx, ty);
+    if (b) {
+      selectedBuilding = b.id;
+      selection = [];
+      return;
+    }
+    // Clicked empty terrain: clear selection.
+    selection = [];
+    selectedBuilding = null;
   }
 
   canvas.addEventListener("contextmenu", (e) => e.preventDefault());
@@ -163,6 +220,11 @@ export function createControls(opts: {
     } else if (e.button === 2) {
       e.preventDefault();
       const tile = screenToTile(camera, p.x, p.y);
+      // Right-click in placement mode cancels placement.
+      if (placementKind) {
+        placementKind = null;
+        return;
+      }
       const cmd = rightClickCommand(tile.x, tile.y);
       if (cmd) enqueue(cmd);
     }
@@ -171,14 +233,24 @@ export function createControls(opts: {
   // Listen on window so a drag that ends outside the canvas still resolves.
   window.addEventListener("mouseup", (e) => {
     if (e.button !== 0 || !drag.active) return;
-    if (drag.moved) boxSelect();
-    else {
-      const id = unitAtScreen(drag.startX, drag.startY);
-      selection = id === null ? [] : [id];
+    if (drag.moved) {
+      boxSelect();
+    } else {
+      const tile = screenToTile(camera, drag.startX, drag.startY);
+      leftClickResolved(tile.x, tile.y, drag.startX, drag.startY);
     }
     drag.active = false;
     drag.moved = false;
   });
+
+  function selectedBuildingObj(): Building | null {
+    if (selectedBuilding === null) return null;
+    return getState().buildings[selectedBuilding] ?? null;
+  }
+
+  function hoveredTile(): { x: number; y: number } {
+    return screenToTile(camera, mouse.x, mouse.y);
+  }
 
   window.addEventListener("keydown", (e) => {
     if (e.code === "Space") {
@@ -187,18 +259,81 @@ export function createControls(opts: {
       return;
     }
     if (e.code === "Escape") {
+      placementKind = null;
       selection = [];
+      selectedBuilding = null;
+      return;
+    }
+    if (PLACEMENT_KEYS[e.code]) {
+      e.preventDefault();
+      placementKind = PLACEMENT_KEYS[e.code];
       return;
     }
     // F: plough the grass tile under the cursor with the selected units (req §10).
     if (e.code === "KeyF") {
       if (selection.length > 0 && mouse.inside) {
-        const tile = screenToTile(camera, mouse.x, mouse.y);
+        const tile = hoveredTile();
         const s = getState();
         const t = tileAt(s.map, tile.x, tile.y);
-        if ((t === "grass" || t === "stump") && !fieldAt(s.fields, tile.x, tile.y)) {
+        if ((t === "grass" || t === "stump") && !fieldAt(s.fields, tile.x, tile.y) && !buildingAt(s.buildings, tile.x, tile.y)) {
           enqueue({ type: "field", unitIds: [...selection], action: "plough", tx: tile.x, ty: tile.y });
         }
+      }
+      return;
+    }
+    // X: demolish the selected building (req §7.1).
+    if (e.code === "KeyX") {
+      const b = selectedBuildingObj();
+      if (b) {
+        enqueue({ type: "demolish", buildingId: b.id });
+        selectedBuilding = null;
+      }
+      return;
+    }
+    // R: repair the selected building with the selected workers (req §7.1).
+    if (e.code === "KeyR") {
+      const b = selectedBuildingObj();
+      if (b && selection.length > 0) {
+        enqueue({ type: "repair", buildingId: b.id, unitIds: [...selection] });
+      }
+      return;
+    }
+    // K / L: craft sword / shield in the selected smithy with selected worker.
+    if (e.code === "KeyK" || e.code === "KeyL") {
+      const b = selectedBuildingObj();
+      if (b && b.kind === "smithy" && selection.length > 0) {
+        enqueue({
+          type: "craft",
+          buildingId: b.id,
+          item: e.code === "KeyK" ? "sword" : "shield",
+          unitIds: [...selection],
+        });
+      }
+      return;
+    }
+    // T: train selected unit in the selected barracks (worker→soldier or
+    // soldier→captain, inferred from the selected unit's kind).
+    if (e.code === "KeyT") {
+      const b = selectedBuildingObj();
+      if (b && b.kind === "barracks" && selection.length > 0) {
+        const s = getState();
+        const u = s.units[selection[0]];
+        if (u) {
+          const toKind =
+            u.kind === "worker" ? "soldier"
+            : u.kind === "soldier" ? "captain"
+            : null;
+          if (toKind) {
+            enqueue({ type: "train", buildingId: b.id, toKind, unitIds: [u.id] });
+          }
+        }
+      }
+      return;
+    }
+    // C: cancel current order on selected units (used to pull operators out).
+    if (e.code === "KeyC") {
+      if (selection.length > 0) {
+        enqueue({ type: "cancel", unitIds: [...selection] });
       }
       return;
     }
@@ -238,6 +373,14 @@ export function createControls(opts: {
     }
   }
 
+  function placementGhost(): PlacementGhost | null {
+    if (!placementKind || !mouse.inside) return null;
+    const tile = hoveredTile();
+    const s = getState();
+    const valid = placementValid(s.map, s.buildings, s.fields, placementKind, tile.x, tile.y);
+    return { tx: tile.x, ty: tile.y, valid };
+  }
+
   function getView(): View {
     let dragBox: DragBox | null = null;
     if (drag.active && drag.moved) {
@@ -248,7 +391,13 @@ export function createControls(opts: {
         h: Math.abs(drag.curY - drag.startY),
       };
     }
-    return { camera, selection: [...selection], dragBox };
+    return {
+      camera,
+      selection: [...selection],
+      selectedBuildings: selectedBuilding !== null ? [selectedBuilding] : [],
+      dragBox,
+      placement: placementGhost(),
+    };
   }
 
   function setViewport(w: number, h: number): void {

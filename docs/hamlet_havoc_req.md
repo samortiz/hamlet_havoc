@@ -70,7 +70,10 @@ To meet the ≥30 FPS target (§24) on a 40×60 grid:
 - Load all sprites from a **single texture atlas**, with a **preload step** before the intro screen (supports the 5-second load NFR).
 
 ### 2.10 Testing
-- Because the simulation is decoupled from rendering, it can run **headless**: advance the sim for N ticks with scripted commands and assert on state. Prioritize tests for combat math, upkeep/demotion, the farming lifecycle, tax resolution, and save → load → equality round-trips.
+Two layers, matching the sim/render split:
+- **Headless sim tests (Vitest, `test/`)** — advance the sim for N ticks with scripted commands and assert on state. This is where mechanics live: combat math, upkeep/demotion, farming lifecycle, tax resolution, save → load → equality round-trips, deterministic ticking. The simulation core is fully exercisable here with no canvas/DOM.
+- **Browser play-tests (Playwright, `e2e/`)** — drive the real page in headless Chrome to cover what the headless sim tests cannot: rendering, input wiring, HUD updates, save/reload, console-error-free boot. The page exposes a dev-only `window.__game` hook (`getState`, `enqueue(command)`, `tick(n)`) so tests can fast-forward multi-minute sim cycles in milliseconds. Keep this layer thin — mechanics belong in the sim tests; the e2e suite asserts only that the wiring around the sim is intact.
+- Run scripts: `npm test` (sim), `npm run test:e2e` (browser), `npm run test:all` (both).
 
 ---
 
@@ -165,7 +168,7 @@ A new game initializes with:
 
 ### 6.5 Selection, Movement & Orders
 - Player selects unit(s) by clicking (single) or drag-box (multiple).
-- **Base movement speed: 1 tile/second** (tunable — see §26); a horse doubles it.
+- **Base movement speed: 2 tiles/second** (tunable — see §26); a horse doubles it.
 - Movement uses pathfinding (A\* recommended) on the walkable tile grid. **Walkability is dynamic:** clearing forest, placing/destroying a building, and building a mine all change which tiles are passable, so paths recompute when the grid changes. Buildings occupy and block their tiles.
 - **Orders (unit task model):** each unit holds a current order with a target and runs a small state machine. Orders: `Move`, `Gather` (wood/fish/mine), `Build`, `Plough`, `Plant`, `Harvest`, `Train`, `Trade`, `Attack`, `Idle`. A gather/build order cycles through sub-states (move-to-target → work → when full, move-to-storage → deposit → repeat) and continues until interrupted, the target is exhausted/invalid, or a season lock makes it invalid.
 - **Right-click target resolution** (context-sensitive): empty walkable tile → Move; a work target (forest, water-adjacent tile, mine, ploughable/plantable/harvestable tile, construction site) → the matching work order if the unit's type permits it; enemy unit → Attack; own smithy/barracks → enter to operate/train.
@@ -260,10 +263,10 @@ A new game initializes with:
 | Plough Field | Worker             | Any     | 20 sec     | Result: ploughed tile ready to plant         |
 | Plant Field  | Worker             | Spring  | 20 sec     | Requires 1 wheat per tile as seed            |
 | Harvest      | Worker             | Fall    | 20 sec     | Yields 4 wheat per tile                      |
-| Collect Wood | Worker             | Any     | 1 Wood / 15 sec |  |
-| Fishing      | Worker / Soldier   | Any     | 1 Meat / 15 sec | 1 Meat / 10 sec in summer;  1 Meat / 30 sec in winter |
+| Collect Wood | Worker             | Any     | 1 Wood / 5 sec |  |
+| Fishing      | Worker / Soldier   | Any     | 1 Meat / 5 sec | Seasonal variance lands in M4 (faster in summer, slower in winter) |
 | Building     | Worker             | Any     | varies   | varies by building |
-| Mining       | Worker / Soldier   | Any     | 1 yield / 20 sec | Yields stone/iron/gold; small diamond chance from gold mines |
+| Mining       | Worker / Soldier   | Any     | 1 yield / 5 sec | Yields stone/iron/gold; small diamond chance from gold mines |
 
 ### 10.2 Action Mechanics
 - Duration is the real world second cost for one completion of the action.
@@ -288,7 +291,7 @@ A new game initializes with:
 ## 12. Wood Gathering
 
 - Worker stands on or adjacent to a forest tile and chops.
-- Yields wood gradually (1 wood per 15 seconds).
+- Yields wood gradually (1 wood per 5 seconds).
 - Worker carries up to 5 wood, then must walk to storage.
 - Forest tiles deplete after 5 wood is harvested and become stumps; the tile is then bare grass and buildable.
 - Regrowth: Forest stumps will regrow at the start of spring.
@@ -306,10 +309,10 @@ A new game initializes with:
 - Mines can be destroyed, losing resources spent creating it, but they can be rebuilt and randomly assigned a new type.
 
 ### 13.2 Operation
-- A worker (or soldier) inside the mine produces ore over time.
+- A worker (or soldier) inside the mine produces ore over time (1 yield / 5 sec).
 - Carry limit applies; worker returns to storage when full.
-- Iron and gold mines attract goblin attacks: for each 20-second mining interval there is a **15% chance** of a goblin spawning near the mine.
-- Gold mines have a 10% chance to produce a diamond instead of gold for each 20 sec spent mining.
+- Iron and gold mines attract goblin attacks: for each mining interval there is a **15% chance** of a goblin spawning near the mine. (Spawn cadence is tied to the mining-yield interval; M5/M6 may tune this independently.)
+- Gold mines have a 10% chance to produce a diamond instead of gold per yield.
 
 ### 13.3 Mine Exhaustion
 - Mines do not exhaust, but can only be occupied by one worker at a time.
@@ -319,7 +322,7 @@ A new game initializes with:
 ## 14. Fishing
 
 - Worker or soldier on a tile adjacent to water can fish.
-- Yields 1 Meat / 15 sec in Spring and Fall;  1 Meat / 10 sec in summer (summer bonus ≈ double);  1 Meat / 30 sec in winter.
+- Current tuned base rate: **1 Meat / 5 sec** in all seasons. Seasonal variance (faster in summer, slower in winter) lands in M4 alongside the rest of the season-locked rules.
 - Yields meat as a resource.
 - Carry limit applies.
 
@@ -424,14 +427,21 @@ A library of 6–10 misc events provides variety. Each is defined by the data ta
 ## 20. Input
 
 - **Mouse**:
-  - Left click: select unit / UI element.
-  - Drag: box-select multiple units.
-  - Right click (or context): move or action target.
+  - Left click: select unit / building / UI element. Click a building tile to single-select that building.
+  - Drag: box-select multiple units. (Buildings are click-only — drag-select does not pick them.)
+  - Right click (or context): move or action target. In placement mode, right-click cancels placement.
 - **Keyboard**:
   - Arrow keys / WASD: camera pan.
-  - Number keys (1–9): control groups (deferred — not in v1).
-  - Space: pause 
-  - Escape: cancel current action / menu.
+  - Number keys 1–6: enter placement mode for House (1), Barn (2), Smithy (3), Barracks (4), Mine (5), Hay Field (6). Left-click then places.
+  - F: plough the hovered grass tile with the selected workers.
+  - X: demolish the selected building (Main Hall excluded).
+  - R: repair the selected building with the selected workers.
+  - K / L: craft Sword / Shield at the selected smithy.
+  - T: train selected unit at the selected barracks (worker → soldier or soldier → captain, by source kind).
+  - C: cancel the current order on selected units.
+  - Space: pause.
+  - Escape: cancel placement mode / clear selection / close menu.
+  - Number keys 7–9 (control groups): deferred — not in v1.
 
 ---
 
@@ -502,17 +512,18 @@ All prior open design questions have been resolved and folded into the sections 
 | Value                                  | Section   | Current / Default                |
 |----------------------------------------|-----------|----------------------------------|
 | Wheat yield per harvested tile         | §11       | 4 wheat per tile                 |
-| Wood gathering rate                    | §10 / §12 | 1 wood / 15 sec                  |
-| Mining yield rate                      | §10 / §13 | 1 yield / 20 sec                 |
+| Wood gathering rate                    | §10 / §12 | 1 wood / 5 sec                   |
+| Fishing base rate                      | §10 / §14 | 1 meat / 5 sec (season variance pending M4) |
+| Mining yield rate                      | §10 / §13 | 1 yield / 5 sec                  |
 | Mine type probabilities                | §13.1     | Stone 50% / Iron 40% / Gold 10%  |
-| Diamond chance from gold mine          | §13.2     | 10% per 20-sec interval          |
-| Goblin spawn chance at iron/gold mine  | §13.2     | 15% per 20-sec interval          |
+| Diamond chance from gold mine          | §13.2     | 10% per yield                    |
+| Goblin spawn chance at iron/gold mine  | §13.2     | 15% per mining interval          |
 | Season duration                        | §15.2     | 60 sec                           |
 | Building HP values                     | §7        | 50–100 (see table)               |
 | Per-event tax amounts & scaling        | §16.2     | Defined per event                |
 | Per-event enemy counts & type mix      | §16.1     | Defined per event                |
 | Misc event magnitudes & full roster    | §16.3     | TBD (table to be filled in)      |
-| Base unit movement speed               | §6.5      | 1 tile / sec                     |
+| Base unit movement speed               | §6.5      | 2 tiles / sec                    |
 | Barracks housing capacity              | §7.4      | 4 soldiers/captains per barracks |
 | Enemy loot drop rates                  | §6.1      | TBD (e.g., goblin gold chance)   |
 | Goblin spawn count & placement at mine | §13.2     | TBD (count near the mine tile)   |
@@ -532,8 +543,8 @@ Each milestone lists its **goal**, **key deliverables**, and an **acceptance che
 
 **M0 — Scaffold**
 - Goal: A running, empty game shell on the target architecture.
-- Deliverables: TypeScript + Vite + Vitest project; `index.html` + module loading; the `game/` (sim) ↔ `render/` ↔ `ui/` separation (§2.6) with a stateless `update(state, commands)` core; plain-data id-based `gameState` + seeded PRNG; tick-based fixed-timestep loop (30/sec, §2.7) decoupled from `requestAnimationFrame`; config-data skeleton (§2.6); HTML/CSS HUD shell; pause (Space).
-- Acceptance: Page loads, the loop ticks at a stable rate, pause halts the sim but not rendering, and a trivial headless sim test runs under Vitest.
+- Deliverables: TypeScript + Vite + Vitest + Playwright project; `index.html` + module loading; the `game/` (sim) ↔ `render/` ↔ `ui/` separation (§2.6) with a stateless `update(state, commands)` core; plain-data id-based `gameState` + seeded PRNG; tick-based fixed-timestep loop (30/sec, §2.7) decoupled from `requestAnimationFrame`; config-data skeleton (§2.6); HTML/CSS HUD shell; pause (Space); dev-only `window.__game` sim hook (`getState`, `enqueue`, `tick`) for browser play-tests (§2.10).
+- Acceptance: Page loads, the loop ticks at a stable rate, pause halts the sim but not rendering, a trivial headless sim test runs under Vitest, and a Playwright smoke test boots the page console-error-free.
 
 **M1 — Map, Camera & Selection**
 - Goal: A navigable world with selectable, movable units.
@@ -542,13 +553,15 @@ Each milestone lists its **goal**, **key deliverables**, and an **acceptance che
 
 **M2 — Worker Loop & Persistence**
 - Goal: The core gather-and-deposit economy, savable.
-- Deliverables: Wood chopping (with depletion/stumps), farming lifecycle (plough/plant/grow/harvest), fishing, basic mining; carry caps and deposit-to-nearest-storage; pooled storage limit; HUD resource bar; LocalStorage auto-save + manual save/load.
-- Acceptance: A worker gathers each resource type, deposits respecting caps, and the full game state survives a save/reload.
+- Deliverables: Wood chopping (with depletion/stumps), farming lifecycle (plough/plant/grow/harvest), fishing, basic mining; carry caps and deposit-to-nearest-storage; pooled storage limit; HUD resource bar; LocalStorage auto-save + manual save/load; Playwright browser play-test covering the gather→deposit cycle and save/reload via `window.__game`.
+- Acceptance: A worker gathers each resource type, deposits respecting caps, and the full game state survives a save/reload — verified both by the Vitest sim suite and by the M2 Playwright play-tests.
 
 **M3 — Buildings**
 - Goal: The full construction system.
-- Deliverables: Placement mode + validity rules (§7.1); under-construction sprites; all building types; smithy crafting (1 season/item); barracks training paths gated by barracks housing (§7.4); repair and demolish.
-- Acceptance: Player can build, repair, and demolish each building type and craft/train from the relevant buildings.
+- Deliverables: Placement mode + validity rules (§7.1); under-construction sprites (semi-transparent fill with a gold progress bar); all building types (house/barn/smithy/barracks/mine + hay-field tile feature); smithy crafting (1 season/item, output to a global equipment pool); barracks training paths gated by barracks housing (§7.4); repair and demolish. Mining now requires a built Mine on the mountain tile (§13.1); mine type is rolled at construction completion.
+- New commands wired through the sim: `build`, `repair`, `demolish`, `craft`, `train`, `cancel`. New unit orders: `build` (construction/repair), `operate` (smithy/barracks "enter and work" loop, with the operator hidden from the map while inside).
+- Input layer: digit hotkeys 1–6 enter placement mode for each building kind; X/R/K/L/T/C drive demolish/repair/craft-sword/craft-shield/train/cancel on the current selection.
+- Acceptance: Player can build, repair, and demolish each building type and craft/train from the relevant buildings — verified by the Vitest sim suite (`test/buildings.test.ts`) and Playwright (`e2e/m3.spec.ts`).
 
 **M4 — Seasons, Time & Upkeep**
 - Goal: The yearly cycle drives gameplay.

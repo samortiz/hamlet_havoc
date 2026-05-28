@@ -17,10 +17,21 @@ export interface DragBox {
   h: number;
 }
 
+// Placement-mode preview (req §7.1). While the player is choosing a tile for a
+// new building, the ghost shows where it would land and whether it's a legal
+// spot (green = valid, red = invalid).
+export interface PlacementGhost {
+  tx: number;
+  ty: number;
+  valid: boolean;
+}
+
 export interface View {
   camera: Camera;
   selection: number[];
+  selectedBuildings: number[];
   dragBox: DragBox | null; // screen-space, only while drag-selecting
+  placement: PlacementGhost | null;
 }
 
 export const WORLD_PX_WIDTH = MAP_WIDTH * TILE_SIZE;

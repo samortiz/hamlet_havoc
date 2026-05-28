@@ -85,11 +85,25 @@ describe("mining", () => {
     const w = s.units[id];
     const mountain = findNearestTile(s, "mountain", w.x, w.y)!;
 
+    // M3: mining requires a built mine on the mountain tile (req §13).
+    // Mine costs 4 wood — stock it and build the mine first, then mine it.
+    s = { ...s, resources: { ...s.resources, wood: 10 } };
+    s = update(s, [{ type: "build", unitIds: [id], kind: "mine", tx: mountain.x, ty: mountain.y }], 1);
+    s = update(s, [], TICKS_PER_SECOND * 60);
     s = update(s, [{ type: "gather", unitIds: [id], tx: mountain.x, ty: mountain.y }], 1);
     s = update(s, [], TICKS_PER_SECOND * 250);
 
     const total = s.resources.stone + s.resources.iron + s.resources.gold + s.resources.diamond;
     expect(total).toBeGreaterThan(0);
+  });
+
+  it("gathering on a bare mountain (no mine) is a no-op", () => {
+    let s = createInitialState(777);
+    const id = firstWorkerId(s);
+    const w = s.units[id];
+    const mountain = findNearestTile(s, "mountain", w.x, w.y)!;
+    s = update(s, [{ type: "gather", unitIds: [id], tx: mountain.x, ty: mountain.y }], 1);
+    expect(s.units[id].order.type).toBe("idle");
   });
 });
 

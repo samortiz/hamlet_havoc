@@ -19,13 +19,13 @@ export const TICKS_PER_SEASON = ticks(SECONDS_PER_SEASON);
 export const TICKS_PER_YEAR = TICKS_PER_SEASON * SEASONS.length;
 
 // --- Units (req §6, §26) ---
-export const BASE_MOVE_TILES_PER_SEC = 1;
+export const BASE_MOVE_TILES_PER_SEC = 2;
 export const WORKER_CARRY_CAP = 5; // resource slots (req §6.1)
 
 // --- Gathering rates (req §10, §12, §13, §14, §26) ---
-export const WOOD_TICKS_PER_UNIT = ticks(15); // 1 wood / 15 sec
-export const FISH_TICKS_PER_UNIT = ticks(15); // base; seasonal variance lands in M4 (§14)
-export const ORE_TICKS_PER_UNIT = ticks(20); // 1 yield / 20 sec
+export const WOOD_TICKS_PER_UNIT = ticks(5); // 1 wood / 5 sec
+export const FISH_TICKS_PER_UNIT = ticks(5); // base; seasonal variance lands in M4 (§14)
+export const ORE_TICKS_PER_UNIT = ticks(5); // 1 yield / 5 sec
 export const FOREST_WOOD_MAX = 5; // wood per forest tile before it becomes a stump (§12)
 
 // Mine type probabilities (§13.1) and gold-mine diamond chance (§13.2).
@@ -65,6 +65,57 @@ export const BUILDING_HP = {
 } as const;
 export const FIELD_HP = 5; // ploughed/hay fields are flimsy tile features (§7)
 
+// Construction times in ticks (§7 table). Starting buildings are spawned
+// already complete (progress = BUILD_TICKS[kind]) in createInitialState.
+export const BUILD_TICKS = {
+  mainHall: ticks(60),
+  house: ticks(20),
+  barn: ticks(30),
+  smithy: ticks(60),
+  barracks: ticks(60),
+  mine: ticks(30),
+} as const;
+
+// Hay-field is a tile feature (like a ploughed field), not a building (§7).
+// Construction time + cost shipped here so the build flow stays data-driven.
+export const HAY_FIELD_BUILD_TICKS = ticks(30);
+
+// Construction cost per kind (§7 table). A blank record means "no cost"
+// (e.g., mainHall is pre-built and never placed by the player).
+export type BuildCost = Partial<Record<
+  "hay" | "wheat" | "wood" | "stone" | "meat" | "iron" | "gold" | "diamond",
+  number
+>>;
+export const BUILDING_COST: Record<keyof typeof BUILD_TICKS, BuildCost> = {
+  mainHall: {}, // not buildable
+  house: { wood: 3, wheat: 2 },
+  barn: { wood: 5 },
+  smithy: { stone: 3, wood: 3 },
+  barracks: { stone: 3, wood: 4, iron: 2 },
+  mine: { wood: 4 },
+};
+export const HAY_FIELD_COST: BuildCost = { wood: 2 };
+
+// --- Smithy crafting (§7.2) ---
+// "Each item takes 1 season to craft" — so craft duration tracks season length.
+export const CRAFT_TICKS = TICKS_PER_SEASON;
+export const CRAFT_COST: Record<"sword" | "shield", BuildCost> = {
+  sword: { iron: 2 },
+  shield: { iron: 2, wood: 2 },
+};
+
+// --- Barracks training (§7.3) ---
+// "Worker → Soldier: 1 season. Soldier → Captain: 1 season."
+export const TRAIN_TICKS = TICKS_PER_SEASON;
+
+// HP per unit kind (§6.1). Soldier/Captain land here in M3 because training
+// promotes a worker into one, even though combat is still M5.
+export const UNIT_MAX_HP = {
+  worker: 2,
+  soldier: 4,
+  captain: 6,
+} as const;
+
 // --- Persistence (req §2.5) ---
 export const SAVE_KEY = "hamlet-havoc-save";
 export const AUTOSAVE_TICKS = ticks(10); // autosave every 10 sec of sim time
@@ -102,6 +153,8 @@ export const COLORS = {
   fieldPloughed: "#6b5436",
   fieldPlanted: "#7c8a3f",
   fieldGrown: "#c9a96e",
+  hayBuilding: "#7a6a52",
+  hayMature: "#c4b070",
   // buildings (placeholder fills, req §3.2)
   buildingMainHall: "#8b7355",
   buildingHouse: "#a98c63",

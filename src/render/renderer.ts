@@ -1,8 +1,8 @@
 // Render layer (req §2.2). Reads GameState + view and draws the world to the
 // canvas; never mutates state. Terrain is culled to the viewport (req §2.9).
 
-import { COLORS, MAP_HEIGHT, MAP_WIDTH, TILE_SIZE } from "../config/index.js";
-import type { BuildingKind } from "../game/buildings.js";
+import { BUILD_TICKS, COLORS, MAP_HEIGHT, MAP_WIDTH, TILE_SIZE } from "../config/index.js";
+import { isBuilt, type Building, type BuildingKind } from "../game/buildings.js";
 import type { FieldStage } from "../game/fields.js";
 import { tileAt, type TileType } from "../game/map.js";
 import { carriedTotal } from "../game/resources.js";
@@ -21,6 +21,8 @@ const FIELD_COLOR: Record<FieldStage, string> = {
   ploughed: COLORS.fieldPloughed,
   planted: COLORS.fieldPlanted,
   grown: COLORS.fieldGrown,
+  hayBuilding: COLORS.hayBuilding,
+  hayMature: COLORS.hayMature,
 };
 
 const BUILDING_COLOR: Record<BuildingKind, string> = {
@@ -56,6 +58,65 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
     const dpr = window.devicePixelRatio || 1;
     canvas.width = Math.max(1, Math.floor(rect.width * dpr));
     canvas.height = Math.max(1, Math.floor(rect.height * dpr));
+  }
+
+  function drawBuilding(b: Building): void {
+    const built = isBuilt(b);
+    const pad = 3;
+    const bx = b.x * TILE_SIZE + pad;
+    const by = b.y * TILE_SIZE + pad;
+    const size = TILE_SIZE - pad * 2;
+
+    if (!built) {
+      // Under-construction: dashed outline + progress bar (req §7.1).
+      c.fillStyle = COLORS.buildingOther;
+      c.globalAlpha = 0.35;
+      c.fillRect(bx, by, size, size);
+      c.globalAlpha = 1;
+      c.setLineDash([3, 2]);
+      c.lineWidth = 2;
+      c.strokeStyle = COLORS.gold;
+      c.strokeRect(bx, by, size, size);
+      c.setLineDash([]);
+      const pct = b.progress / BUILD_TICKS[b.kind];
+      c.fillStyle = COLORS.gold;
+      c.fillRect(bx, by + size - 4, Math.max(0, size * pct), 4);
+      return;
+    }
+
+    c.fillStyle = BUILDING_COLOR[b.kind];
+    c.fillRect(bx, by, size, size);
+    c.lineWidth = 2;
+    c.strokeStyle = COLORS.buildingOutline;
+    c.strokeRect(bx, by, size, size);
+    c.fillStyle = COLORS.buildingLabel;
+    c.font = `bold ${Math.round(TILE_SIZE * 0.5)}px system-ui, sans-serif`;
+    c.textAlign = "center";
+    c.textBaseline = "middle";
+    c.fillText(BUILDING_LABEL[b.kind], (b.x + 0.5) * TILE_SIZE, (b.y + 0.5) * TILE_SIZE);
+
+    // HP bar shown only when damaged (req §7.1: repair flow).
+    if (b.hp < b.maxHp) {
+      const hpW = size;
+      c.fillStyle = "#5c2018";
+      c.fillRect(bx, by - 4, hpW, 3);
+      c.fillStyle = "#7ea854";
+      c.fillRect(bx, by - 4, hpW * (b.hp / b.maxHp), 3);
+    }
+
+    // Smithy/barracks craft/train progress while occupied — small status pip.
+    if (b.kind === "smithy" && b.craftItem) {
+      c.fillStyle = COLORS.carryCue;
+      c.beginPath();
+      c.arc(bx + size - 3, by + 3, 3, 0, Math.PI * 2);
+      c.fill();
+    }
+    if (b.kind === "barracks" && b.trainTo) {
+      c.fillStyle = COLORS.gold;
+      c.beginPath();
+      c.arc(bx + size - 3, by + 3, 3, 0, Math.PI * 2);
+      c.fill();
+    }
   }
 
   function render(state: GameState, view: View): void {
@@ -103,31 +164,48 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
     }
 
     // Buildings (inset square + a single-letter label).
-    const pad = 3;
+    const selectedBuildings = new Set(view.selectedBuildings ?? []);
     for (const b of Object.values(state.buildings)) {
-      const bx = b.x * TILE_SIZE + pad;
-      const by = b.y * TILE_SIZE + pad;
-      const size = TILE_SIZE - pad * 2;
-      c.fillStyle = BUILDING_COLOR[b.kind];
-      c.fillRect(bx, by, size, size);
+      drawBuilding(b);
+      if (selectedBuildings.has(b.id)) {
+        const pad = 3;
+        c.lineWidth = 2;
+        c.strokeStyle = COLORS.selectionRing;
+        c.strokeRect(
+          b.x * TILE_SIZE + pad - 2,
+          b.y * TILE_SIZE + pad - 2,
+          TILE_SIZE - pad * 2 + 4,
+          TILE_SIZE - pad * 2 + 4,
+        );
+      }
+    }
+
+    // Placement ghost preview (req §7.1, while in placement mode).
+    const ghost = view.placement;
+    if (ghost) {
+      c.globalAlpha = 0.55;
+      c.fillStyle = ghost.valid ? COLORS.gold : "#b04030";
+      c.fillRect(ghost.tx * TILE_SIZE + 4, ghost.ty * TILE_SIZE + 4, TILE_SIZE - 8, TILE_SIZE - 8);
+      c.globalAlpha = 1;
       c.lineWidth = 2;
-      c.strokeStyle = COLORS.buildingOutline;
-      c.strokeRect(bx, by, size, size);
-      c.fillStyle = COLORS.buildingLabel;
-      c.font = `bold ${Math.round(TILE_SIZE * 0.5)}px system-ui, sans-serif`;
-      c.textAlign = "center";
-      c.textBaseline = "middle";
-      c.fillText(BUILDING_LABEL[b.kind], (b.x + 0.5) * TILE_SIZE, (b.y + 0.5) * TILE_SIZE);
+      c.strokeStyle = ghost.valid ? COLORS.gold : "#b04030";
+      c.strokeRect(ghost.tx * TILE_SIZE + 4, ghost.ty * TILE_SIZE + 4, TILE_SIZE - 8, TILE_SIZE - 8);
     }
 
     const selected = new Set(view.selection);
     const radius = TILE_SIZE * 0.35;
     for (const u of Object.values(state.units)) {
+      // Units inside a building are hidden from the map; the building's
+      // status pip stands in for them while they work (req §7.2/§7.3).
+      if (u.insideBuildingId !== null) continue;
       const cx = (u.x + 0.5) * TILE_SIZE;
       const cy = (u.y + 0.5) * TILE_SIZE;
       c.beginPath();
       c.arc(cx, cy, radius, 0, Math.PI * 2);
-      c.fillStyle = COLORS.worker;
+      c.fillStyle =
+        u.kind === "soldier" ? "#b89678"
+        : u.kind === "captain" ? "#d4af37"
+        : COLORS.worker;
       c.fill();
       c.lineWidth = 2;
       c.strokeStyle = COLORS.unitOutline;

@@ -14,7 +14,8 @@
       "Bash(kill 119304)",
       "Bash(google-chrome-stable --version)",
       "Bash(google-chrome-stable --headless=new --no-sandbox --disable-gpu --dump-dom 'data:text/html,<h1 id=x>hello</h1>')",
-      "Bash(echo \"=== EXIT $? ===\")"
+      "Bash(echo \"=== EXIT $? ===\")",
+      "Bash(npx playwright *)"
     ]
   }
 }

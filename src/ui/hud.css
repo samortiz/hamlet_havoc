@@ -94,6 +94,48 @@ body {
   color: var(--parchment);
 }
 
+/* Population + equipment strip (req §7.4, §19.1) */
+#hud-status {
+  position: absolute;
+  top: 67px;
+  left: 0;
+  right: 0;
+  display: flex;
+  gap: 18px;
+  padding: 4px 14px;
+  background: rgba(28, 35, 22, 0.72);
+  border-bottom: 1px solid rgba(212, 175, 55, 0.6);
+  font-size: 12px;
+  color: var(--parchment);
+}
+
+/* Build menu legend (req §19.1) — mirrors the keys in controls.ts. */
+#hud-build-menu {
+  position: absolute;
+  bottom: 10px;
+  left: 12px;
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+  padding: 6px 10px;
+  background: rgba(28, 35, 22, 0.88);
+  border: 1px solid var(--gold);
+  border-radius: 4px;
+  font-size: 12px;
+  color: var(--parchment);
+  max-width: 60%;
+}
+
+#hud-build-menu strong {
+  color: var(--gold);
+  margin-right: 4px;
+}
+
+#hud-build-menu .sep {
+  opacity: 0.4;
+}
+
 /* Save / load controls — the one part of the HUD that takes pointer events. */
 #hud-controls {
   position: absolute;

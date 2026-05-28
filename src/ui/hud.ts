@@ -1,8 +1,14 @@
 // HUD layer (req §2.2, §19). Reads GameState and reflects it into the HTML
-// overlay (resource bar, pooled storage, season/timer). Read-only with respect
-// to simulation state; the Save/Load/New buttons invoke caller-supplied
-// callbacks rather than touching state directly.
+// overlay (resource bar, pooled storage, season/timer, population caps,
+// equipment counts, build menu). Read-only with respect to simulation state;
+// the Save/Load/New buttons invoke caller-supplied callbacks rather than
+// touching state directly.
 
+import {
+  barracksHousingCap,
+  unitCount,
+  workerHousingCap,
+} from "../game/actions.js";
 import { storageCapacity } from "../game/buildings.js";
 import { poolTotal, RESOURCE_TYPES, type ResourceType } from "../game/resources.js";
 import { deriveSeason, type GameState } from "../game/state.js";
@@ -43,6 +49,8 @@ export function createHud(cb: HudCallbacks): Hud {
   const resourcesEl = el("hud-resources");
   const storageEl = el("hud-storage");
   const toastEl = el("hud-toast");
+  const popEl = el("hud-population");
+  const equipEl = el("hud-equipment");
 
   // Build one cell per resource, before the storage readout.
   const countEls = {} as Record<ResourceType, HTMLElement>;
@@ -81,6 +89,14 @@ export function createHud(cb: HudCallbacks): Hud {
 
     for (const t of RESOURCE_TYPES) countEls[t].textContent = String(state.resources[t]);
     storageEl.textContent = `Storage ${poolTotal(state.resources)}/${storageCapacity(state.buildings)}`;
+
+    const workers = unitCount(state.units, "worker");
+    const soldiers = unitCount(state.units, "soldier");
+    const captains = unitCount(state.units, "captain");
+    const workerCap = workerHousingCap(state.buildings);
+    const barracksCap = barracksHousingCap(state.buildings);
+    popEl.textContent = `Pop W:${workers}/${workerCap} · S:${soldiers} · C:${captains}/${barracksCap}`;
+    equipEl.textContent = `Sword:${state.equipment.sword} · Shield:${state.equipment.shield}`;
   }
 
   return { update, flash };

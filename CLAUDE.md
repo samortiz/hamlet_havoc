@@ -17,6 +17,8 @@ npm run build      # type-check (tsc --noEmit) + production bundle to dist/
 npm run preview    # serve the production build
 npm test           # run the Vitest headless sim tests
 npm run typecheck  # tsc --noEmit only
+npm run test:e2e   # Playwright browser play-tests (boots Vite, drives Chrome)
+npm run test:all   # Vitest + Playwright back-to-back
 ```
 
 ## Architecture
@@ -52,9 +54,20 @@ src/
     hud.css          — HUD + layout styles
 index.html           — canvas + HUD overlay shell; loads /src/main.ts
 test/                — Vitest headless simulation tests
+e2e/                 — Playwright browser play-tests (boots Vite, drives Chrome)
+playwright.config.ts — Playwright config (headless system Chrome, port 5173)
 ```
 
-> Seasons/upkeep, combat, enemy AI, the full construction system, and end-of-year events are still to come (M3–M6). Final art assets are not provided; v1 uses placeholder hand-drawn-style sprites (req §3.2).
+### Testing
+
+Two layers, matching the sim/render split (req §2.10):
+
+- **Vitest sim tests** (`test/`) — pure headless `update(state, commands, dtTicks)` exercises. This is where mechanics live: gather rates, carry caps, farming lifecycle, save round-trips, deterministic ticking. Fast (~600ms for the suite).
+- **Playwright browser tests** (`e2e/`) — boot the real page, drive it through `window.__game` (a dev-only sim hook exposing `getState`, `enqueue`, `tick`). Keep this layer thin: page loads, no console errors, HUD reflects state, input wiring, save/reload — not mechanics. The `tick(n)` seam fast-forwards the sim so a multi-minute gather cycle completes in milliseconds of real time.
+
+Run both: `npm run test:all`.
+
+> Seasons/upkeep, combat, enemy AI, and end-of-year events are still to come (M4–M6). M3's construction system (placement, all building types, smithy crafting, barracks training, repair, demolish) is implemented. Final art assets are not provided; v1 uses placeholder hand-drawn-style sprites (req §3.2).
 
 ### Rendering
 
@@ -92,21 +105,37 @@ LocalStorage auto-save and manual save. JSON-serialized game state. No save slot
 - Captains carry only equipment, no resources.
 - Combat: 1 attack/sec. Damage = random(min, max) − defender.defense. Min damage = 0.
 - Any unit can have a horse: +3 HP (horse absorbs first 3 damage), ×2 speed, +5 carry. Upkeep: 2 hay or 2 wheat/season.
+- Base movement speed: **2 tiles/sec** (tunable, see §26); horse doubles it.
 
 ### Buildings
 - Placed on grass (except Mines on mountain tiles; ploughed fields and hay fields on grass).
-- Storage is pooled globally (Main Hall=20, House=10, Barn=50).
-- Any worker can operate any building (smithy, barracks).
-- Smithy item production: 1 season per item (Sword: 2 Iron; Shield: 2 Iron + 2 Wood).
-- Barracks training: Worker→Soldier or Soldier→Captain = 1 season; unit pays new upkeep immediately.
-- Buildings can be repaired (same materials as construction) and demolished by the player.
+- Storage is pooled globally (Main Hall=20, House=10, Barn=50). Storage from under-construction buildings doesn't count toward the cap until they finish.
+- Construction times (req §7 table): House 20s · Barn 30s · Smithy 60s · Barracks 60s · Mine 30s · Hay Field 30s · Plough 20s. Multiple builders on the same site stack progress linearly.
+- Construction cost is deducted on placement, not on completion — demolish refunds nothing.
+- Mine tile type (stone/iron/gold) is rolled by the seeded RNG at construction completion (req §13.1).
+- Any worker can operate any building (smithy, barracks). One operator at a time per building; re-issuing `craft` to the same operator lets them switch item.
+- Smithy item production: 1 season per item (Sword: 2 Iron; Shield: 2 Iron + 2 Wood). Items go into a global equipment pool; equipping onto a unit lands in M5.
+- Barracks training: Worker→Soldier or Soldier→Captain = 1 season; gated by barracks housing (§7.4). Promoted unit gets the new kind's max HP and emerges at the barracks tile.
+- Buildings can be repaired (HP restored over time at the build-cost rate; cost scales with HP missing) and demolished by the player. The Main Hall can't be demolished (it's a loss condition).
+
+### Input (M3 additions)
+- Digits 1–6 enter placement mode for House / Barn / Smithy / Barracks / Mine / Hay Field. Left-click places the building (one-shot); Esc or right-click cancels placement.
+- F (with a selected unit) ploughs the hovered grass tile.
+- Click a building tile to select that building (no drag-select for buildings).
+- X: demolish the selected building.
+- R: repair the selected building with the selected workers.
+- K / L: with a smithy selected and a worker selected, craft Sword / Shield.
+- T: train selected unit at the selected barracks (inferred from kind: worker→soldier, soldier→captain).
+- C: cancel current order on selected units (used to pull a smithy operator out, etc.).
 
 ### Resource Gathering
-- **Wood**: 1 wood/15 sec from forest tile; carry cap 5; forest depletes after 5 wood (becomes stump, regrows at Spring start).
-- **Fishing**: 1 meat/15 sec (Spring/Fall), 1/10 sec (Summer), 1/30 sec (Winter). Worker or soldier on tile adjacent to water.
-- **Mining**: Worker or soldier inside a mine. Mine type assigned at build: Stone (50%), Iron (40%), Gold (10%). Gold mine: 10% chance diamond per yield. Iron/gold mines: 15% goblin spawn chance per 20-sec interval.
+- **Wood**: 1 wood/5 sec from forest tile; carry cap 5; forest depletes after 5 wood (becomes stump, regrows at Spring start).
+- **Fishing**: 1 meat/5 sec base (seasonal variance lands in M4 per req §14). Worker or soldier on tile adjacent to water.
+- **Mining**: Worker or soldier inside a mine; 1 yield/5 sec. Mine type assigned at build: Stone (50%), Iron (40%), Gold (10%). Gold mine: 10% chance diamond per yield. Iron/gold mines: 15% goblin spawn chance per mining interval (M3+).
 - **Farming**: Plough (any season, 20 sec) → Plant spring only (costs 1 wheat/tile, 20 sec) → grows summer → Harvest fall (20 sec). Unharvested crops lost at end of fall.
 - **Hay fields**: No ploughing needed; cost 2 wood; produce continuously each year without replanting.
+
+> Gather rates and unit speed are tuned values exposed in `src/config/index.ts`; they will be retuned during M7 balancing.
 
 ### Combat & Enemies
 - Enemies target nearest building or unit; goblins from mines target the miner first.
@@ -138,10 +167,10 @@ LocalStorage auto-save and manual save. JSON-serialized game state. No save slot
 
 ## Development Milestones
 
-1. **M1** — Canvas, tile rendering, map gen, camera, unit rendering + selection.
-2. **M2** — Worker resource loop (wood, farming lifecycle, fishing, mining), storage, HUD.
-3. **M3** — Building system (construction, all types, smithy, barracks).
+1. **M1** ✅ — Canvas, tile rendering, map gen, camera, unit rendering + selection.
+2. **M2** ✅ — Worker resource loop (wood, farming lifecycle, fishing, mining), storage, HUD, persistence.
+3. **M3** ✅ — Building system (placement, construction, all types, smithy crafting, barracks training, repair, demolish). Mining now requires a built mine.
 4. **M4** — Season cycle, action durations, upkeep, season-locked actions.
 5. **M5** — Soldiers, captains, enemy AI, equipment.
 6. **M6** — End-of-year event system (attack, tax, misc), event announcement.
-7. **M7** — Save/load, game-over screen, balancing, intro screen.
+7. **M7** — Game-over screen, balancing, intro screen.

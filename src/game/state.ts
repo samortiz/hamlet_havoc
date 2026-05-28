@@ -16,9 +16,19 @@ import { generateMap, HAMLET_CENTER, type GameMap } from "./map.js";
 import { emptyPool, type ResourcePool } from "./resources.js";
 import { makeWorker, type Unit } from "./units.js";
 
-// Bumped to 2 in M2: state gained buildings/fields/resources, so M1 saves are
+// Bumped to 3 in M3: buildings gained progress/maxHp/occupant/craft/train,
+// units gained insideBuildingId, state gained an equipment pool. M2 saves are
 // no longer loadable and are rejected by deserialize().
-export const SAVE_VERSION = 2;
+export const SAVE_VERSION = 3;
+
+// Equipment crafted at the smithy lives in a small global pool (req §7.2).
+// Units pull from this pool when equipping in M5; the smithy posts here when
+// an item completes. Kept separate from `resources` because equipment is not
+// freely trade-valued like wheat or wood.
+export interface EquipmentPool {
+  sword: number;
+  shield: number;
+}
 
 export interface GameState {
   version: number;
@@ -32,6 +42,7 @@ export interface GameState {
   buildings: Record<number, Building>;
   fields: Record<number, Field>;
   resources: ResourcePool;
+  equipment: EquipmentPool;
 }
 
 export function createInitialState(seed: number): GameState {
@@ -45,6 +56,7 @@ export function createInitialState(seed: number): GameState {
 
   // Starting hamlet (req §5): 1 Main Hall + 2 Houses, laid out in the grass
   // clearing. These provide the initial pooled storage and drop-off points.
+  // They spawn already completed — the player did not build them.
   const placements: ReadonlyArray<{ kind: BuildingKind; x: number; y: number }> = [
     { kind: "mainHall", x: cx, y: cy },
     { kind: "house", x: cx - 2, y: cy },
@@ -52,7 +64,7 @@ export function createInitialState(seed: number): GameState {
   ];
   for (const p of placements) {
     const id = nextEntityId++;
-    buildings[id] = makeBuilding(id, p.kind, p.x, p.y);
+    buildings[id] = makeBuilding(id, p.kind, p.x, p.y, { built: true });
   }
 
   // 4 starting workers on open clearing tiles around the buildings.
@@ -80,6 +92,7 @@ export function createInitialState(seed: number): GameState {
     buildings,
     fields: {},
     resources,
+    equipment: { sword: 0, shield: 0 },
   };
 }
 
