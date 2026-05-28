@@ -104,11 +104,15 @@ function main(): void {
     // ignore an unreadable/incompatible save and keep the fresh game
   }
 
+  const actionPanelEl = document.getElementById("action-panel");
+  if (!(actionPanelEl instanceof HTMLElement)) throw new Error("#action-panel not found");
+
   const controls = createControls({
     canvas,
     getState: () => state,
     enqueue: (cmd) => commandQueue.push(cmd),
     onTogglePause: () => (paused = !paused),
+    actionPanel: actionPanelEl,
   });
 
   function syncViewport(): void {
@@ -138,8 +142,9 @@ function main(): void {
       if (state.tickCount - lastAutosaveTick >= AUTOSAVE_TICKS) saveGame(true);
     }
 
-    renderer.render(state, controls.getView());
-    hud.update(state, paused);
+    const view = controls.getView();
+    renderer.render(state, view);
+    hud.update(state, paused, view);
     requestAnimationFrame(frame);
   }
 

@@ -15,7 +15,24 @@
       "Bash(google-chrome-stable --version)",
       "Bash(google-chrome-stable --headless=new --no-sandbox --disable-gpu --dump-dom 'data:text/html,<h1 id=x>hello</h1>')",
       "Bash(echo \"=== EXIT $? ===\")",
-      "Bash(npx playwright *)"
+      "Bash(npx playwright *)",
+      "Bash(mkdir -p /home/sortiz/projects/hamlet_havoc/public/assets)",
+      "Bash(curl -fL -o kenney_hexagon-pack.zip 'https://kenney.nl/media/pages/assets/hexagon-pack/433cdc69d6-1677662331/kenney_hexagon-pack.zip')",
+      "Bash(unzip -q kenney_hexagon-pack.zip -d kenney-hex)",
+      "Bash(file PNG/Tiles/Terrain/*.png)",
+      "Bash(rm -f public/assets/kenney_hexagon-pack.zip)",
+      "Bash(rm -f public/assets/kenney-hex/*.url public/assets/kenney-hex/Sample.png public/assets/kenney-hex/Preview.png)",
+      "Bash(rm -rf public/assets/kenney-hex/Vector public/assets/kenney-hex/Spritesheets)",
+      "Bash(mkdir -p public/assets/sprites)",
+      "Bash(cp public/assets/kenney-hex/PNG/Tiles/Terrain/Grass/grass_05.png public/assets/sprites/terrain_grass.png)",
+      "Bash(cp public/assets/kenney-hex/PNG/Tiles/Terrain/Grass/grass_12.png public/assets/sprites/terrain_forest.png)",
+      "Bash(cp public/assets/kenney-hex/PNG/Tiles/Terrain/Stone/stone_01.png public/assets/sprites/terrain_mountain.png)",
+      "Bash(cp public/assets/kenney-hex/PNG/Tiles/Terrain/Dirt/dirt_01.png public/assets/sprites/terrain_stump.png)",
+      "Bash(curl -fsSL 'https://kenney.nl/media/pages/assets/hexagon-pack/433cdc69d6-1677662331/license.txt')",
+      "Bash(curl -fsS http://localhost:5173/ -o /dev/null -w \"index: %{http_code}\\\\n\")",
+      "Bash(curl -fsS http://localhost:5173/assets/sprites/terrain_grass.png -o /dev/null -w \"grass png: %{http_code} \\(%{size_download} bytes\\)\\\\n\")",
+      "Bash(curl -fsS http://localhost:5173/assets/sprites/building_mainHall.png -o /dev/null -w \"castle png: %{http_code} \\(%{size_download} bytes\\)\\\\n\")",
+      "Bash(node -e \"require.resolve\\('@playwright/test'\\)\")"
     ]
   }
 }

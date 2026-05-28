@@ -16,10 +16,15 @@ import { generateMap, HAMLET_CENTER, type GameMap } from "./map.js";
 import { emptyPool, type ResourcePool } from "./resources.js";
 import { makeWorker, type Unit } from "./units.js";
 
-// Bumped to 3 in M3: buildings gained progress/maxHp/occupant/craft/train,
-// units gained insideBuildingId, state gained an equipment pool. M2 saves are
-// no longer loadable and are rejected by deserialize().
-export const SAVE_VERSION = 3;
+// Bumped to 4: the board switched from a square 40×60 grid to a 40×40
+// pointy-top hex grid (req §4.1). Building/Unit (x, y) now name odd-r hex
+// coordinates rather than square tile coordinates, so v3 saves restored
+// verbatim would have buildings landing in geometrically different places.
+// Rejected by deserialize().
+//
+// Previous bumps: 2 (M2 — fields/buildings/resources), 3 (M3 — build
+// progress/occupants/equipment).
+export const SAVE_VERSION = 4;
 
 // Equipment crafted at the smithy lives in a small global pool (req §7.2).
 // Units pull from this pool when equipping in M5; the smithy posts here when

@@ -1,6 +1,9 @@
-// Tile map + procedural generation (req §4). The map is plain data (row-major
-// tile array) so it serializes with the rest of the state. Generation is driven
-// by the seeded RNG (req §2.6) so a given seed always yields the same world.
+// Tile map + procedural generation (req §4). The board is a **pointy-top
+// hexagonal grid** in odd-r offset coordinates; tiles[] stays row-major so
+// the storage format is unchanged. All adjacency, distance, and pixel math
+// lives in src/game/hex.ts — this module reads from it.
+// Generation is driven by the seeded RNG (req §2.6) so a given seed always
+// yields the same world.
 
 import {
   FOREST_WOOD_MAX,
@@ -9,6 +12,7 @@ import {
   MAP_WIDTH,
   TERRAIN_TARGET,
 } from "../config/index.js";
+import { hexDistance, hexNeighbors, hexStep } from "./hex.js";
 import { rngInt } from "./rng.js";
 
 // "stump" is a depleted forest tile: walkable, no more wood, and (from M4)
@@ -65,28 +69,21 @@ export function forestRemaining(map: GameMap, idx: number): number {
   return map.forestWood[idx] ?? FOREST_WOOD_MAX;
 }
 
-// A land tile adjacent (4-way) to at least one water tile can fish (req §14).
+// A land tile hex-adjacent to at least one water tile can fish (req §14).
+// "Adjacent" = hex-distance 1, i.e. one of the 6 odd-r neighbors.
 export function isWaterAdjacent(map: GameMap, x: number, y: number): boolean {
-  for (const [dx, dy] of NEIGHBORS4) {
-    if (inBounds(map, x + dx, y + dy) && tileAt(map, x + dx, y + dy) === "water")
-      return true;
+  for (const n of hexNeighbors(x, y)) {
+    if (inBounds(map, n.x, n.y) && tileAt(map, n.x, n.y) === "water") return true;
   }
   return false;
 }
 
+// The hamlet starts in a hex-disc of grass (req §4.3). Using hex distance
+// keeps the clearing symmetrical on the actual board geometry — a Chebyshev
+// square would punch out a diamond shape in hex space.
 function inClearing(x: number, y: number, radius: number): boolean {
-  return (
-    Math.abs(x - HAMLET_CENTER.x) <= radius &&
-    Math.abs(y - HAMLET_CENTER.y) <= radius
-  );
+  return hexDistance({ x, y }, HAMLET_CENTER) <= radius;
 }
-
-const NEIGHBORS4: ReadonlyArray<readonly [number, number]> = [
-  [1, 0],
-  [-1, 0],
-  [0, 1],
-  [0, -1],
-];
 
 // Grow a connected blob of `type` over grass tiles starting near (sx, sy).
 // The hamlet clearing acts as a barrier (skipped), so it always stays grass.
@@ -117,9 +114,7 @@ function growBlob(
 
     tiles[idx] = type;
     placed++;
-    for (const [dx, dy] of NEIGHBORS4) {
-      frontier.push({ x: cell.x + dx, y: cell.y + dy });
-    }
+    for (const n of hexNeighbors(cell.x, cell.y)) frontier.push(n);
   }
   return { rngState: rng, placed };
 }
@@ -160,12 +155,18 @@ export function generateMap(rngState: number): {
   let rng = rngState;
 
   // Guarantee starting access to every gathering terrain just outside the
-  // hamlet clearing (req §4.3: reasonable access from the start position).
-  const r = HAMLET_CLEARING_RADIUS;
+  // hamlet clearing (req §4.3). Pick three cube directions at distance r+1
+  // so forest/mountain/water sit at different bearings around the center.
+  // Direction indices into CUBE_DIRECTIONS (see hex.ts): 0=E, 2=NW, 5=SE.
+  const r = HAMLET_CLEARING_RADIUS + 1;
+  const forestSeed = hexStep(HAMLET_CENTER, 3, r); // west
+  const mountainSeed = hexStep(HAMLET_CENTER, 0, r); // east
+  const waterSeed = hexStep(HAMLET_CENTER, 2, r); // north-east (above)
+
   const seeds = [
-    { type: "forest" as const, x: HAMLET_CENTER.x - (r + 1), y: HAMLET_CENTER.y, size: 14 },
-    { type: "mountain" as const, x: HAMLET_CENTER.x + (r + 1), y: HAMLET_CENTER.y, size: 10 },
-    { type: "water" as const, x: HAMLET_CENTER.x, y: HAMLET_CENTER.y - (r + 1), size: 10 },
+    { type: "forest" as const, ...forestSeed, size: 14 },
+    { type: "mountain" as const, ...mountainSeed, size: 10 },
+    { type: "water" as const, ...waterSeed, size: 10 },
   ];
   const seeded = { forest: 0, water: 0, mountain: 0 };
   for (const s of seeds) {

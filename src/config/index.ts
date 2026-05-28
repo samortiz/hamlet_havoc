@@ -7,9 +7,15 @@ export const ticks = (seconds: number): number =>
   Math.round(seconds * TICKS_PER_SECOND);
 
 // --- Map (req §4) ---
+// Pointy-top hex grid, odd-r offset coordinates. The row-major tiles[] array
+// stores them like a square grid — only the adjacency, distance, and pixel
+// math differ (see src/game/hex.ts).
 export const MAP_WIDTH = 40;
-export const MAP_HEIGHT = 60;
-export const TILE_SIZE = 32;
+export const MAP_HEIGHT = 40;
+// Circumradius of a single hex in CSS pixels. Hex width = √3 · HEX_SIZE,
+// height = 2 · HEX_SIZE. Sized so Kenney hexagon sprites (120×140 native ≈
+// circumradius 70) downscale crisply onto a ~70×80 footprint.
+export const HEX_SIZE = 40;
 
 // --- Time & seasons (req §15) ---
 export const SEASONS = ["Spring", "Summer", "Fall", "Winter"] as const;

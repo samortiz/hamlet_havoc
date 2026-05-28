@@ -1,8 +1,17 @@
-// Camera + view data (req §4.4). The camera and selection are *view* state, not
-// simulation state: they are not saved and never fed into update(). Coordinates
-// are in CSS pixels (world space, 1:1 with tiles*TILE_SIZE — no zoom in M1).
+// Camera + view data (req §4.4). The camera and selection are *view* state,
+// not simulation state: they are not saved and never fed into update().
+// Coordinates are in CSS pixels (world space). The board is a pointy-top hex
+// grid; pixel ↔ hex math lives in src/game/hex.ts.
 
-import { MAP_HEIGHT, MAP_WIDTH, TILE_SIZE } from "../config/index.js";
+import { HEX_SIZE, MAP_HEIGHT, MAP_WIDTH } from "../config/index.js";
+import {
+  HEX_HEIGHT,
+  HEX_HORIZ_SPACING,
+  HEX_VERT_SPACING,
+  HEX_WIDTH,
+  hexToPixel,
+  pixelToHex,
+} from "../game/hex.js";
 import type { TileCoord } from "../game/map.js";
 
 export interface Camera {
@@ -32,10 +41,17 @@ export interface View {
   selectedBuildings: number[];
   dragBox: DragBox | null; // screen-space, only while drag-selecting
   placement: PlacementGhost | null;
+  hoveredUnitId: number | null;
+  mouseScreenX: number;
+  mouseScreenY: number;
 }
 
-export const WORLD_PX_WIDTH = MAP_WIDTH * TILE_SIZE;
-export const WORLD_PX_HEIGHT = MAP_HEIGHT * TILE_SIZE;
+// World pixel bounds. The +0.5 width adjustment accounts for the rightward
+// shift of odd rows (their right-most hex extends half a width past the
+// even-row right edge). The vertical math comes from the row spacing plus the
+// full height of the last row's hex.
+export const WORLD_PX_WIDTH = MAP_WIDTH * HEX_HORIZ_SPACING + 0.5 * HEX_HORIZ_SPACING;
+export const WORLD_PX_HEIGHT = (MAP_HEIGHT - 1) * HEX_VERT_SPACING + HEX_HEIGHT;
 
 function clamp(v: number, lo: number, hi: number): number {
   return v < lo ? lo : v > hi ? hi : v;
@@ -53,19 +69,20 @@ export function centerOnTile(
   viewW: number,
   viewH: number,
 ): Camera {
+  const { px, py } = hexToPixel(tile.x, tile.y);
   return clampCamera(
-    {
-      x: (tile.x + 0.5) * TILE_SIZE - viewW / 2,
-      y: (tile.y + 0.5) * TILE_SIZE - viewH / 2,
-    },
+    { x: px - viewW / 2, y: py - viewH / 2 },
     viewW,
     viewH,
   );
 }
 
-export function screenToTile(cam: Camera, sx: number, sy: number): TileCoord {
-  return {
-    x: Math.floor((sx + cam.x) / TILE_SIZE),
-    y: Math.floor((sy + cam.y) / TILE_SIZE),
-  };
+// Convert a screen-space pixel (relative to the canvas top-left) to a hex
+// coordinate. Inverse of hexToPixel + camera offset.
+export function screenToHex(cam: Camera, sx: number, sy: number): TileCoord {
+  return pixelToHex(sx + cam.x, sy + cam.y);
 }
+
+// Re-export the hex pixel geometry constants for consumers that need them
+// alongside the camera (renderer, tests).
+export { HEX_HEIGHT, HEX_HORIZ_SPACING, HEX_VERT_SPACING, HEX_WIDTH, HEX_SIZE };

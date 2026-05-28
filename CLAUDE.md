@@ -31,12 +31,13 @@ Client-side game authored in TypeScript modules under `src/`, bundled by Vite in
 src/
   main.ts            — bootstrap; fixed-timestep loop (30 ticks/sec) decoupled from render
   config/
-    index.ts         — tunable constants (durations→ticks, map size, palette); single source of truth (§2.6, §26)
+    index.ts         — tunable constants (durations→ticks, map size, HEX_SIZE, palette); single source of truth (§2.6, §26)
   game/              — simulation core (imports nothing from render/ or ui/)
     state.ts         — central GameState, initial state, season derivation
-    map.ts           — 40×60 tile map + procedural generation + per-tile forest/mine state
+    map.ts           — 40×40 pointy-top hex map + procedural generation + per-hex forest/mine state
+    hex.ts           — hex geometry: 6-neighbor adjacency, hex distance, pixel↔hex math (single source of truth for grid shape)
     rng.ts           — seeded PRNG (mulberry32); state lives in GameState
-    pathfinding.ts   — hand-written grid A* on walkable tiles
+    pathfinding.ts   — hand-written hex-grid A* (6-direction, uniform cost, hex-distance heuristic)
     units.ts         — unit definitions and order/task model
     resources.ts     — resource types, values, pool/inventory helpers
     buildings.ts     — building kinds, storage, nearest-storage lookup
@@ -48,10 +49,10 @@ src/
   render/
     renderer.ts      — canvas drawing; reads state, never mutates it
   ui/
-    camera.ts        — camera/view state + screen↔tile transforms (not saved)
-    controls.ts      — mouse/keyboard input, selection, command emission
-    hud.ts           — HUD overlay updates (reads state)
-    hud.css          — HUD + layout styles
+    camera.ts        — camera/view state + screen↔tile transforms (not saved); View includes hoveredUnitId + mouse screen coords
+    controls.ts      — mouse/keyboard input, selection, command emission; manages #action-panel DOM (build/unit/building sections)
+    hud.ts           — HUD overlay updates (reads state + view); manages #unit-tooltip on hover
+    hud.css          — HUD + layout styles (tooltip, action panel, resource bar, etc.)
 index.html           — canvas + HUD overlay shell; loads /src/main.ts
 test/                — Vitest headless simulation tests
 e2e/                 — Playwright browser play-tests (boots Vite, drives Chrome)
@@ -73,8 +74,18 @@ Run both: `npm run test:all`.
 
 - HTML5 `<canvas>` for game world; HUD as overlaid HTML/CSS elements.
 - Target: 1280×720 baseline, scalable. 30–60 FPS target.
-- Tile size: 32×32 px. Map: 40×60 tiles.
+- Pointy-top hex tiles, `HEX_SIZE = 40` (circumradius). Per-hex footprint ≈ 69 wide × 80 tall px. Map: 40×40 hexes.
 - V1 uses static sprites (no frame animation).
+
+### Coordinate system
+
+The board uses **odd-r offset coordinates**: a hex is named by `(col, row)` where odd rows are visually shifted half a hex-width to the right. `tiles[]` is row-major exactly like a square grid; only the adjacency, distance, and pixel-conversion math differ.
+
+All geometry helpers live in `src/game/hex.ts` (a pure module, no render/ui dependencies):
+- `hexNeighbors(x, y)` returns the 6 odd-r neighbors.
+- `hexDistance(a, b)` is the cube-coordinate hex distance (drives the A* heuristic).
+- `hexToPixel(x, y)` / `pixelToHex(px, py)` map between offset coordinates and world-pixel centers (supports fractional inputs for smooth unit interpolation).
+- `hexStep(center, dirIdx, count)` walks N hops in one of the 6 cube directions (used for map-gen seeding).
 
 ### Game Loop
 
@@ -120,7 +131,7 @@ LocalStorage auto-save and manual save. JSON-serialized game state. No save slot
 
 ### Input (M3 additions)
 - Digits 1–6 enter placement mode for House / Barn / Smithy / Barracks / Mine / Hay Field. Left-click places the building (one-shot); Esc or right-click cancels placement.
-- F (with a selected unit) ploughs the hovered grass tile.
+- F (with a selected unit): if hovering a valid grass tile, ploughs it immediately; otherwise toggles pending-plough mode (next left-click on a grass tile sends the plough command).
 - Click a building tile to select that building (no drag-select for buildings).
 - X: demolish the selected building.
 - R: repair the selected building with the selected workers.
@@ -128,9 +139,13 @@ LocalStorage auto-save and manual save. JSON-serialized game state. No save slot
 - T: train selected unit at the selected barracks (inferred from kind: worker→soldier, soldier→captain).
 - C: cancel current order on selected units (used to pull a smithy operator out, etc.).
 
+### Action Panel & Tooltip (UI additions)
+- **Action panel** (bottom-left, `#action-panel`): replaces the old static keyboard-legend build menu. Built and managed by `controls.ts` — rebuilt whenever selection changes. Always shows a **Build** section with clickable buttons (mirrors digit keys 1–6). Shows a **Unit** section (Cancel, Plough buttons) when units are selected. Shows a **Building** section (Demolish, Repair, Craft Sword/Shield, Train) when a building is selected; available actions depend on building kind and whether workers are also selected.
+- **Unit tooltip** (`#unit-tooltip`): appears when hovering over a unit on the canvas. Shows kind, HP / max HP, current order description, and carrying inventory. Managed by `hud.ts`; positioned near the cursor, flipping left/up to avoid viewport clipping. Hidden when the mouse leaves the canvas or hovers empty terrain.
+
 ### Resource Gathering
 - **Wood**: 1 wood/5 sec from forest tile; carry cap 5; forest depletes after 5 wood (becomes stump, regrows at Spring start).
-- **Fishing**: 1 meat/5 sec base (seasonal variance lands in M4 per req §14). Worker or soldier on tile adjacent to water.
+- **Fishing**: 1 meat/5 sec base (seasonal variance lands in M4 per req §14). Worker or soldier on hex adjacent to water.
 - **Mining**: Worker or soldier inside a mine; 1 yield/5 sec. Mine type assigned at build: Stone (50%), Iron (40%), Gold (10%). Gold mine: 10% chance diamond per yield. Iron/gold mines: 15% goblin spawn chance per mining interval (M3+).
 - **Farming**: Plough (any season, 20 sec) → Plant spring only (costs 1 wheat/tile, 20 sec) → grows summer → Harvest fall (20 sec). Unharvested crops lost at end of fall.
 - **Hay fields**: No ploughing needed; cost 2 wood; produce continuously each year without replanting.
@@ -154,10 +169,11 @@ LocalStorage auto-save and manual save. JSON-serialized game state. No save slot
 - Can buy/sell all basic resources and purchase horses (cost = 20 resource value).
 
 ### Input
-- Left click: select unit / UI element. Drag: box-select. Right-click: move or action target.
+- Left click: select unit / UI element (or confirm placement/plough in pending mode). Drag: box-select. Right-click: move or action target.
 - Arrow keys / WASD: camera pan. Edge-scroll also supported.
-- Space: pause. Escape: cancel action/close menu.
+- Space: pause. Escape: cancel action/placement/pending-plough/close menu.
 - No number-key control groups in v1.
+- All keyboard shortcuts have clickable equivalents in the action panel; both work simultaneously.
 
 ### Color Palette
 - Greens: `#4a5d3a`, `#6b7d4f`. Browns: `#5c4a35`, `#8b7355`.
@@ -170,6 +186,8 @@ LocalStorage auto-save and manual save. JSON-serialized game state. No save slot
 1. **M1** ✅ — Canvas, tile rendering, map gen, camera, unit rendering + selection.
 2. **M2** ✅ — Worker resource loop (wood, farming lifecycle, fishing, mining), storage, HUD, persistence.
 3. **M3** ✅ — Building system (placement, construction, all types, smithy crafting, barracks training, repair, demolish). Mining now requires a built mine.
+3.5 **Hex board** ✅ — Square 40×60 grid replaced with a 40×40 pointy-top hex grid. 6-neighbor adjacency, hex A*, SAVE_VERSION = 4.
+3.6 **UI polish** ✅ — Unit tooltip on hover (kind, HP, order, carrying). Clickable action panel replaces static keyboard-legend: Build section (always), Unit section (when unit selected), Building section (when building selected). Pending-plough mode added alongside F-key plough.
 4. **M4** — Season cycle, action durations, upkeep, season-locked actions.
 5. **M5** — Soldiers, captains, enemy AI, equipment.
 6. **M6** — End-of-year event system (attack, tax, misc), event announcement.

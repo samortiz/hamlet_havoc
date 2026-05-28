@@ -1,9 +1,11 @@
-// A* on the walkable tile grid (req §6.5). 8-directional with no diagonal
-// corner-cutting. Deterministic: ties broken by insertion order so a given
+// A* on the hex grid (req §6.5). 6-directional with uniform cost 1 per hop —
+// no diagonal-cost asymmetry, no corner-cutting check (neither exists on a
+// hex grid). Deterministic: ties broken by insertion order so a given
 // (map, start, goal) always yields the same path. Pure — depends only on the
 // map's current walkability, which lets later milestones re-path when terrain
 // or buildings change.
 
+import { hexDistance, hexNeighbors } from "./hex.js";
 import { isWalkable, type GameMap, type TileCoord } from "./map.js";
 
 interface HeapItem {
@@ -55,24 +57,6 @@ class MinHeap {
   }
 }
 
-const SQRT2 = Math.SQRT2;
-const DIRS: ReadonlyArray<readonly [number, number, number]> = [
-  [1, 0, 1],
-  [-1, 0, 1],
-  [0, 1, 1],
-  [0, -1, 1],
-  [1, 1, SQRT2],
-  [1, -1, SQRT2],
-  [-1, 1, SQRT2],
-  [-1, -1, SQRT2],
-];
-
-function octile(ax: number, ay: number, bx: number, by: number): number {
-  const dx = Math.abs(ax - bx);
-  const dy = Math.abs(ay - by);
-  return dx + dy + (SQRT2 - 2) * Math.min(dx, dy);
-}
-
 // Returns the tiles from the first step through the goal (excluding the start),
 // [] if already at the goal, or null if the goal is unwalkable/unreachable.
 export function findPath(
@@ -95,7 +79,7 @@ export function findPath(
   let seq = 0;
 
   g.set(startIdx, 0);
-  open.push({ idx: startIdx, f: octile(start.x, start.y, goal.x, goal.y), seq: seq++ });
+  open.push({ idx: startIdx, f: hexDistance(start, goal), seq: seq++ });
 
   while (open.size > 0) {
     const cur = open.pop();
@@ -106,21 +90,15 @@ export function findPath(
     const cy = (cur.idx - cx) / W;
     const cg = g.get(cur.idx) as number;
 
-    for (const [dx, dy, cost] of DIRS) {
-      const nx = cx + dx;
-      const ny = cy + dy;
-      if (!isWalkable(map, nx, ny)) continue;
-      if (dx !== 0 && dy !== 0) {
-        // disallow squeezing diagonally between two blocked tiles
-        if (!isWalkable(map, cx + dx, cy) || !isWalkable(map, cx, cy + dy)) continue;
-      }
-      const nIdx = ny * W + nx;
+    for (const n of hexNeighbors(cx, cy)) {
+      if (!isWalkable(map, n.x, n.y)) continue;
+      const nIdx = n.y * W + n.x;
       if (closed.has(nIdx)) continue;
-      const ng = cg + cost;
+      const ng = cg + 1; // uniform cost on a hex grid
       if (ng < (g.get(nIdx) ?? Infinity)) {
         g.set(nIdx, ng);
         cameFrom.set(nIdx, cur.idx);
-        open.push({ idx: nIdx, f: ng + octile(nx, ny, goal.x, goal.y), seq: seq++ });
+        open.push({ idx: nIdx, f: ng + hexDistance(n, goal), seq: seq++ });
       }
     }
   }

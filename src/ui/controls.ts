@@ -11,18 +11,20 @@ import {
   CAMERA_PAN_PX_PER_SEC,
   DRAG_SELECT_THRESHOLD_PX,
   EDGE_SCROLL_MARGIN_PX,
-  TILE_SIZE,
+  HEX_SIZE,
 } from "../config/index.js";
 import { placementValid } from "../game/actions.js";
 import { buildingAt, type Building } from "../game/buildings.js";
 import type { BuildableKind, Command } from "../game/commands.js";
 import { fieldAt } from "../game/fields.js";
+import { hexToPixel } from "../game/hex.js";
 import { HAMLET_CENTER, inBounds, tileAt } from "../game/map.js";
 import type { GameState } from "../game/state.js";
+import type { UnitKind } from "../game/units.js";
 import {
   centerOnTile,
   clampCamera,
-  screenToTile,
+  screenToHex,
   type Camera,
   type DragBox,
   type PlacementGhost,
@@ -71,8 +73,9 @@ export function createControls(opts: {
   getState: () => GameState;
   enqueue: (cmd: Command) => void;
   onTogglePause: () => void;
+  actionPanel: HTMLElement;
 }): Controls {
-  const { canvas, getState, enqueue, onTogglePause } = opts;
+  const { canvas, getState, enqueue, onTogglePause, actionPanel } = opts;
 
   let viewW = canvas.clientWidth || 1;
   let viewH = canvas.clientHeight || 1;
@@ -80,6 +83,8 @@ export function createControls(opts: {
   let selection: number[] = [];
   let selectedBuilding: number | null = null;
   let placementKind: BuildableKind | null = null;
+  let pendingPlough = false;
+  let hoveredUnitId: number | null = null;
 
   const held = new Set<string>();
   const mouse = { x: 0, y: 0, inside: false };
@@ -92,6 +97,116 @@ export function createControls(opts: {
     moved: false,
   };
 
+  function apSection(label: string): HTMLElement {
+    const div = document.createElement("div");
+    div.className = "ap-section";
+    const lbl = document.createElement("span");
+    lbl.className = "ap-label";
+    lbl.textContent = label + ":";
+    div.append(lbl);
+    return div;
+  }
+
+  function apButton(label: string, onClick: () => void, active = false): HTMLButtonElement {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.textContent = label;
+    if (active) btn.classList.add("active");
+    btn.addEventListener("click", onClick);
+    return btn;
+  }
+
+  function rebuildActionPanel(): void {
+    actionPanel.innerHTML = "";
+
+    // Build section — always visible; buttons mirror the digit key shortcuts.
+    const buildSection = apSection("Build");
+    const buildKinds: Array<[BuildableKind, string]> = [
+      ["house", "1 House"],
+      ["barn", "2 Barn"],
+      ["smithy", "3 Smithy"],
+      ["barracks", "4 Barracks"],
+      ["mine", "5 Mine"],
+      ["hayField", "6 Hay"],
+    ];
+    for (const [kind, label] of buildKinds) {
+      buildSection.append(
+        apButton(label, () => { placementKind = kind; rebuildActionPanel(); }, placementKind === kind),
+      );
+    }
+    actionPanel.append(buildSection);
+
+    // Unit actions — visible when at least one unit is selected.
+    if (selection.length > 0) {
+      const unitSection = apSection("Unit");
+      unitSection.append(
+        apButton("Cancel", () => { enqueue({ type: "cancel", unitIds: [...selection] }); }),
+        apButton("Plough", () => { pendingPlough = !pendingPlough; rebuildActionPanel(); }, pendingPlough),
+      );
+      actionPanel.append(unitSection);
+    }
+
+    // Building actions — visible when a building is selected.
+    if (selectedBuilding !== null) {
+      const b = getState().buildings[selectedBuilding];
+      if (b) {
+        const bSection = apSection("Building");
+
+        if (b.kind !== "mainHall") {
+          bSection.append(
+            apButton("Demolish", () => {
+              enqueue({ type: "demolish", buildingId: b.id });
+              selectedBuilding = null;
+              rebuildActionPanel();
+            }),
+          );
+        }
+
+        if (selection.length > 0) {
+          bSection.append(
+            apButton("Repair", () => {
+              enqueue({ type: "repair", buildingId: b.id, unitIds: [...selection] });
+            }),
+          );
+        }
+
+        if (b.kind === "smithy" && selection.length > 0) {
+          bSection.append(
+            apButton("Craft Sword", () => {
+              enqueue({ type: "craft", buildingId: b.id, item: "sword", unitIds: [...selection] });
+            }),
+            apButton("Craft Shield", () => {
+              enqueue({ type: "craft", buildingId: b.id, item: "shield", unitIds: [...selection] });
+            }),
+          );
+        }
+
+        if (b.kind === "barracks" && selection.length > 0) {
+          const u = getState().units[selection[0]];
+          if (u) {
+            const toKind: UnitKind | null =
+              u.kind === "worker" ? "soldier"
+              : u.kind === "soldier" ? "captain"
+              : null;
+            if (toKind) {
+              const trainLabel = toKind === "soldier" ? "Train → Soldier" : "Train → Captain";
+              bSection.append(
+                apButton(trainLabel, () => {
+                  enqueue({ type: "train", buildingId: b.id, toKind: toKind!, unitIds: [u.id] });
+                }),
+              );
+            }
+          }
+        }
+
+        actionPanel.append(bSection);
+      }
+    }
+  }
+
+  // Seed the panel on startup.
+  rebuildActionPanel();
+
   function pos(e: MouseEvent): { x: number; y: number } {
     const r = canvas.getBoundingClientRect();
     return { x: e.clientX - r.left, y: e.clientY - r.top };
@@ -101,12 +216,11 @@ export function createControls(opts: {
     const wx = sx + camera.x;
     const wy = sy + camera.y;
     let best: number | null = null;
-    let bestD = (TILE_SIZE * 0.5) ** 2;
+    let bestD = (HEX_SIZE * 0.6) ** 2;
     for (const u of Object.values(getState().units)) {
       if (u.insideBuildingId !== null) continue;
-      const cx = (u.x + 0.5) * TILE_SIZE;
-      const cy = (u.y + 0.5) * TILE_SIZE;
-      const d = (cx - wx) ** 2 + (cy - wy) ** 2;
+      const { px, py } = hexToPixel(u.x, u.y);
+      const d = (px - wx) ** 2 + (py - wy) ** 2;
       if (d <= bestD) {
         bestD = d;
         best = u.id;
@@ -150,15 +264,26 @@ export function createControls(opts: {
     const ids: number[] = [];
     for (const u of Object.values(getState().units)) {
       if (u.insideBuildingId !== null) continue;
-      const cx = (u.x + 0.5) * TILE_SIZE;
-      const cy = (u.y + 0.5) * TILE_SIZE;
-      if (cx >= x0 && cx <= x1 && cy >= y0 && cy <= y1) ids.push(u.id);
+      const { px, py } = hexToPixel(u.x, u.y);
+      if (px >= x0 && px <= x1 && py >= y0 && py <= y1) ids.push(u.id);
     }
     selection = ids;
     if (ids.length > 0) selectedBuilding = null;
+    rebuildActionPanel();
   }
 
   function leftClickResolved(tx: number, ty: number, screenX: number, screenY: number): void {
+    // Pending plough mode: left-click on grass sends the plough command.
+    if (pendingPlough && selection.length > 0) {
+      const s = getState();
+      const t = tileAt(s.map, tx, ty);
+      if ((t === "grass" || t === "stump") && !fieldAt(s.fields, tx, ty) && !buildingAt(s.buildings, tx, ty)) {
+        enqueue({ type: "field", unitIds: [...selection], action: "plough", tx, ty });
+      }
+      pendingPlough = false;
+      rebuildActionPanel();
+      return;
+    }
     // Placement mode wins: a left-click in placement mode places the building.
     if (placementKind) {
       const s = getState();
@@ -166,6 +291,7 @@ export function createControls(opts: {
         enqueue({ type: "build", unitIds: [...selection], kind: placementKind, tx, ty });
       }
       placementKind = null; // one-shot; press the key again to place more
+      rebuildActionPanel();
       return;
     }
     // Unit click first — most precise.
@@ -173,6 +299,7 @@ export function createControls(opts: {
     if (id !== null) {
       selection = [id];
       selectedBuilding = null;
+      rebuildActionPanel();
       return;
     }
     // Building click: pick the building under the tile (if any).
@@ -180,22 +307,25 @@ export function createControls(opts: {
     if (b) {
       selectedBuilding = b.id;
       selection = [];
+      rebuildActionPanel();
       return;
     }
     // Clicked empty terrain: clear selection.
     selection = [];
     selectedBuilding = null;
+    rebuildActionPanel();
   }
 
   canvas.addEventListener("contextmenu", (e) => e.preventDefault());
   canvas.addEventListener("mouseenter", () => (mouse.inside = true));
-  canvas.addEventListener("mouseleave", () => (mouse.inside = false));
+  canvas.addEventListener("mouseleave", () => { mouse.inside = false; hoveredUnitId = null; });
 
   canvas.addEventListener("mousemove", (e) => {
     const p = pos(e);
     mouse.x = p.x;
     mouse.y = p.y;
     mouse.inside = true;
+    hoveredUnitId = unitAtScreen(p.x, p.y);
     if (drag.active) {
       drag.curX = p.x;
       drag.curY = p.y;
@@ -219,7 +349,7 @@ export function createControls(opts: {
       drag.moved = false;
     } else if (e.button === 2) {
       e.preventDefault();
-      const tile = screenToTile(camera, p.x, p.y);
+      const tile = screenToHex(camera, p.x, p.y);
       // Right-click in placement mode cancels placement.
       if (placementKind) {
         placementKind = null;
@@ -236,7 +366,7 @@ export function createControls(opts: {
     if (drag.moved) {
       boxSelect();
     } else {
-      const tile = screenToTile(camera, drag.startX, drag.startY);
+      const tile = screenToHex(camera, drag.startX, drag.startY);
       leftClickResolved(tile.x, tile.y, drag.startX, drag.startY);
     }
     drag.active = false;
@@ -249,7 +379,7 @@ export function createControls(opts: {
   }
 
   function hoveredTile(): { x: number; y: number } {
-    return screenToTile(camera, mouse.x, mouse.y);
+    return screenToHex(camera, mouse.x, mouse.y);
   }
 
   window.addEventListener("keydown", (e) => {
@@ -260,24 +390,32 @@ export function createControls(opts: {
     }
     if (e.code === "Escape") {
       placementKind = null;
+      pendingPlough = false;
       selection = [];
       selectedBuilding = null;
+      rebuildActionPanel();
       return;
     }
     if (PLACEMENT_KEYS[e.code]) {
       e.preventDefault();
       placementKind = PLACEMENT_KEYS[e.code];
+      rebuildActionPanel();
       return;
     }
-    // F: plough the grass tile under the cursor with the selected units (req §10).
+    // F: toggle pending-plough mode (or immediately plough if hovering a valid tile).
     if (e.code === "KeyF") {
-      if (selection.length > 0 && mouse.inside) {
-        const tile = hoveredTile();
-        const s = getState();
-        const t = tileAt(s.map, tile.x, tile.y);
-        if ((t === "grass" || t === "stump") && !fieldAt(s.fields, tile.x, tile.y) && !buildingAt(s.buildings, tile.x, tile.y)) {
-          enqueue({ type: "field", unitIds: [...selection], action: "plough", tx: tile.x, ty: tile.y });
+      if (selection.length > 0) {
+        if (mouse.inside) {
+          const tile = hoveredTile();
+          const s = getState();
+          const t = tileAt(s.map, tile.x, tile.y);
+          if ((t === "grass" || t === "stump") && !fieldAt(s.fields, tile.x, tile.y) && !buildingAt(s.buildings, tile.x, tile.y)) {
+            enqueue({ type: "field", unitIds: [...selection], action: "plough", tx: tile.x, ty: tile.y });
+            return;
+          }
         }
+        pendingPlough = !pendingPlough;
+        rebuildActionPanel();
       }
       return;
     }
@@ -287,6 +425,7 @@ export function createControls(opts: {
       if (b) {
         enqueue({ type: "demolish", buildingId: b.id });
         selectedBuilding = null;
+        rebuildActionPanel();
       }
       return;
     }
@@ -397,6 +536,9 @@ export function createControls(opts: {
       selectedBuildings: selectedBuilding !== null ? [selectedBuilding] : [],
       dragBox,
       placement: placementGhost(),
+      hoveredUnitId,
+      mouseScreenX: mouse.x,
+      mouseScreenY: mouse.y,
     };
   }
 

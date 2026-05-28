@@ -1,13 +1,23 @@
-// Render layer (req §2.2). Reads GameState + view and draws the world to the
-// canvas; never mutates state. Terrain is culled to the viewport (req §2.9).
+// Render layer (req §2.2). Reads GameState + view and draws the hex world to
+// the canvas; never mutates state. Tiles are pointy-top hexes (req §4.1);
+// the geometry lives in src/game/hex.ts.
 
-import { BUILD_TICKS, COLORS, MAP_HEIGHT, MAP_WIDTH, TILE_SIZE } from "../config/index.js";
+import { BUILD_TICKS, COLORS, HEX_SIZE, MAP_HEIGHT, MAP_WIDTH } from "../config/index.js";
 import { isBuilt, type Building, type BuildingKind } from "../game/buildings.js";
 import type { FieldStage } from "../game/fields.js";
+import {
+  hexToPixel,
+  pixelToHex,
+  HEX_HEIGHT,
+  HEX_HORIZ_SPACING,
+  HEX_VERT_SPACING,
+  HEX_WIDTH,
+} from "../game/hex.js";
 import { tileAt, type TileType } from "../game/map.js";
 import { carriedTotal } from "../game/resources.js";
 import type { GameState } from "../game/state.js";
 import type { View } from "../ui/camera.js";
+import { buildingSprite, terrainSprite } from "./sprites.js";
 
 const TERRAIN_COLOR: Record<TileType, string> = {
   grass: COLORS.terrainGrass,
@@ -43,9 +53,39 @@ const BUILDING_LABEL: Record<BuildingKind, string> = {
   mine: "M",
 };
 
+// Kenney sprites are pointy-top hexes with a small "depth" rim at the bottom.
+// Drawing them at exactly HEX_WIDTH × HEX_HEIGHT lines the top vertex up with
+// the hex outline; the depth rim spills ~5% below into the next row, which
+// gives the board a subtle 3D feel as long as we paint rows top-to-bottom.
+const SPRITE_DRAW_W = HEX_WIDTH;
+const SPRITE_DRAW_H = HEX_HEIGHT;
+
 export interface Renderer {
   render: (state: GameState, view: View) => void;
   resize: () => void;
+}
+
+// Pre-compute the 6 vertex offsets for a pointy-top hex (apothem on the
+// horizontal axis). Indices go clockwise from the bottom-right vertex.
+const HEX_VERTEX_OFFSETS: ReadonlyArray<readonly [number, number]> = (() => {
+  const out: [number, number][] = [];
+  for (let i = 0; i < 6; i++) {
+    const angle = (Math.PI / 180) * (60 * i - 30); // -30° offset = pointy-top
+    out.push([Math.cos(angle), Math.sin(angle)]);
+  }
+  return out;
+})();
+
+function tracePath(c: CanvasRenderingContext2D, cx: number, cy: number, size: number): void {
+  c.beginPath();
+  for (let i = 0; i < 6; i++) {
+    const [dx, dy] = HEX_VERTEX_OFFSETS[i];
+    const x = cx + dx * size;
+    const y = cy + dy * size;
+    if (i === 0) c.moveTo(x, y);
+    else c.lineTo(x, y);
+  }
+  c.closePath();
 }
 
 export function createRenderer(canvas: HTMLCanvasElement): Renderer {
@@ -60,61 +100,86 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
     canvas.height = Math.max(1, Math.floor(rect.height * dpr));
   }
 
+  function fillHex(cx: number, cy: number, size: number, color: string): void {
+    tracePath(c, cx, cy, size);
+    c.fillStyle = color;
+    c.fill();
+  }
+
+  function strokeHex(cx: number, cy: number, size: number, color: string, lineWidth = 1): void {
+    tracePath(c, cx, cy, size);
+    c.strokeStyle = color;
+    c.lineWidth = lineWidth;
+    c.stroke();
+  }
+
+  function drawSpriteAt(img: HTMLImageElement, px: number, py: number): void {
+    c.drawImage(
+      img,
+      px - SPRITE_DRAW_W / 2,
+      py - SPRITE_DRAW_H / 2,
+      SPRITE_DRAW_W,
+      SPRITE_DRAW_H,
+    );
+  }
+
   function drawBuilding(b: Building): void {
     const built = isBuilt(b);
-    const pad = 3;
-    const bx = b.x * TILE_SIZE + pad;
-    const by = b.y * TILE_SIZE + pad;
-    const size = TILE_SIZE - pad * 2;
+    const { px, py } = hexToPixel(b.x, b.y);
+    const innerSize = HEX_SIZE * 0.72;
 
     if (!built) {
-      // Under-construction: dashed outline + progress bar (req §7.1).
-      c.fillStyle = COLORS.buildingOther;
+      // Under-construction: dashed outline + progress bar (req §7.1). Drawn
+      // over the existing terrain so the player can see what's being raised.
       c.globalAlpha = 0.35;
-      c.fillRect(bx, by, size, size);
+      fillHex(px, py, innerSize, COLORS.buildingOther);
       c.globalAlpha = 1;
       c.setLineDash([3, 2]);
-      c.lineWidth = 2;
-      c.strokeStyle = COLORS.gold;
-      c.strokeRect(bx, by, size, size);
+      strokeHex(px, py, innerSize, COLORS.gold, 2);
       c.setLineDash([]);
       const pct = b.progress / BUILD_TICKS[b.kind];
+      const barW = innerSize * 1.4;
       c.fillStyle = COLORS.gold;
-      c.fillRect(bx, by + size - 4, Math.max(0, size * pct), 4);
+      c.fillRect(px - barW / 2, py + innerSize * 0.7, barW * pct, 3);
       return;
     }
 
-    c.fillStyle = BUILDING_COLOR[b.kind];
-    c.fillRect(bx, by, size, size);
-    c.lineWidth = 2;
-    c.strokeStyle = COLORS.buildingOutline;
-    c.strokeRect(bx, by, size, size);
-    c.fillStyle = COLORS.buildingLabel;
-    c.font = `bold ${Math.round(TILE_SIZE * 0.5)}px system-ui, sans-serif`;
-    c.textAlign = "center";
-    c.textBaseline = "middle";
-    c.fillText(BUILDING_LABEL[b.kind], (b.x + 0.5) * TILE_SIZE, (b.y + 0.5) * TILE_SIZE);
+    const sprite = buildingSprite(b.kind);
+    if (sprite) {
+      drawSpriteAt(sprite, px, py);
+    } else {
+      // Fallback while the sprite is still decoding: colored hex + letter.
+      fillHex(px, py, innerSize, BUILDING_COLOR[b.kind]);
+      strokeHex(px, py, innerSize, COLORS.buildingOutline, 2);
+      c.fillStyle = COLORS.buildingLabel;
+      c.font = `bold ${Math.round(HEX_SIZE * 0.7)}px system-ui, sans-serif`;
+      c.textAlign = "center";
+      c.textBaseline = "middle";
+      c.fillText(BUILDING_LABEL[b.kind], px, py);
+    }
 
     // HP bar shown only when damaged (req §7.1: repair flow).
     if (b.hp < b.maxHp) {
-      const hpW = size;
+      const hpW = innerSize * 1.4;
+      const hpX = px - hpW / 2;
+      const hpY = py - innerSize - 5;
       c.fillStyle = "#5c2018";
-      c.fillRect(bx, by - 4, hpW, 3);
+      c.fillRect(hpX, hpY, hpW, 3);
       c.fillStyle = "#7ea854";
-      c.fillRect(bx, by - 4, hpW * (b.hp / b.maxHp), 3);
+      c.fillRect(hpX, hpY, hpW * (b.hp / b.maxHp), 3);
     }
 
     // Smithy/barracks craft/train progress while occupied — small status pip.
     if (b.kind === "smithy" && b.craftItem) {
       c.fillStyle = COLORS.carryCue;
       c.beginPath();
-      c.arc(bx + size - 3, by + 3, 3, 0, Math.PI * 2);
+      c.arc(px + innerSize * 0.6, py - innerSize * 0.6, 3, 0, Math.PI * 2);
       c.fill();
     }
     if (b.kind === "barracks" && b.trainTo) {
       c.fillStyle = COLORS.gold;
       c.beginPath();
-      c.arc(bx + size - 3, by + 3, 3, 0, Math.PI * 2);
+      c.arc(px + innerSize * 0.6, py - innerSize * 0.6, 3, 0, Math.PI * 2);
       c.fill();
     }
   }
@@ -128,80 +193,81 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
     c.setTransform(dpr, 0, 0, dpr, 0, 0);
     c.clearRect(0, 0, viewW, viewH);
 
-    // Visible tile range (cull to viewport, req §2.9).
-    const minX = Math.max(0, Math.floor(cam.x / TILE_SIZE));
-    const minY = Math.max(0, Math.floor(cam.y / TILE_SIZE));
-    const maxX = Math.min(MAP_WIDTH - 1, Math.floor((cam.x + viewW) / TILE_SIZE));
-    const maxY = Math.min(MAP_HEIGHT - 1, Math.floor((cam.y + viewH) / TILE_SIZE));
+    // Visible hex range: sample the viewport corners, expand by one hex
+    // margin to be safe (req §2.9 culling).
+    const corners = [
+      pixelToHex(cam.x, cam.y),
+      pixelToHex(cam.x + viewW, cam.y),
+      pixelToHex(cam.x, cam.y + viewH),
+      pixelToHex(cam.x + viewW, cam.y + viewH),
+    ];
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    for (const k of corners) {
+      if (k.x < minX) minX = k.x;
+      if (k.x > maxX) maxX = k.x;
+      if (k.y < minY) minY = k.y;
+      if (k.y > maxY) maxY = k.y;
+    }
+    minX = Math.max(0, minX - 1);
+    minY = Math.max(0, minY - 1);
+    maxX = Math.min(MAP_WIDTH - 1, maxX + 1);
+    maxY = Math.min(MAP_HEIGHT - 1, maxY + 1);
 
     c.save();
     c.translate(-cam.x, -cam.y);
 
+    // Terrain hexes. Top-to-bottom so each sprite's bottom "depth" rim sits
+    // on top of the row below — that's what gives the board a subtle 3D feel.
+    // Sprite lookup falls back to a flat colour fill while images are still
+    // decoding (and permanently for water, which the pack doesn't ship).
     for (let ty = minY; ty <= maxY; ty++) {
       for (let tx = minX; tx <= maxX; tx++) {
-        c.fillStyle = TERRAIN_COLOR[tileAt(state.map, tx, ty)];
-        c.fillRect(tx * TILE_SIZE, ty * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+        const t = tileAt(state.map, tx, ty);
+        const { px, py } = hexToPixel(tx, ty);
+        const sprite = terrainSprite(t);
+        if (sprite) {
+          drawSpriteAt(sprite, px, py);
+        } else {
+          fillHex(px, py, HEX_SIZE, TERRAIN_COLOR[t]);
+        }
       }
     }
 
-    c.strokeStyle = COLORS.gridLine;
-    c.lineWidth = 1;
-    c.beginPath();
-    for (let tx = minX; tx <= maxX + 1; tx++) {
-      c.moveTo(tx * TILE_SIZE, minY * TILE_SIZE);
-      c.lineTo(tx * TILE_SIZE, (maxY + 1) * TILE_SIZE);
-    }
-    for (let ty = minY; ty <= maxY + 1; ty++) {
-      c.moveTo(minX * TILE_SIZE, ty * TILE_SIZE);
-      c.lineTo((maxX + 1) * TILE_SIZE, ty * TILE_SIZE);
-    }
-    c.stroke();
-
-    // Fields (tile features painted over their grass tile).
+    // Fields (tile features painted as a slightly inset hex over their tile).
     for (const f of Object.values(state.fields)) {
-      c.fillStyle = FIELD_COLOR[f.stage];
-      c.fillRect(f.x * TILE_SIZE + 1, f.y * TILE_SIZE + 1, TILE_SIZE - 2, TILE_SIZE - 2);
+      const { px, py } = hexToPixel(f.x, f.y);
+      fillHex(px, py, HEX_SIZE * 0.85, FIELD_COLOR[f.stage]);
     }
 
-    // Buildings (inset square + a single-letter label).
+    // Buildings.
     const selectedBuildings = new Set(view.selectedBuildings ?? []);
     for (const b of Object.values(state.buildings)) {
       drawBuilding(b);
       if (selectedBuildings.has(b.id)) {
-        const pad = 3;
-        c.lineWidth = 2;
-        c.strokeStyle = COLORS.selectionRing;
-        c.strokeRect(
-          b.x * TILE_SIZE + pad - 2,
-          b.y * TILE_SIZE + pad - 2,
-          TILE_SIZE - pad * 2 + 4,
-          TILE_SIZE - pad * 2 + 4,
-        );
+        const { px, py } = hexToPixel(b.x, b.y);
+        strokeHex(px, py, HEX_SIZE * 0.8, COLORS.selectionRing, 2);
       }
     }
 
     // Placement ghost preview (req §7.1, while in placement mode).
     const ghost = view.placement;
     if (ghost) {
+      const { px, py } = hexToPixel(ghost.tx, ghost.ty);
+      const ghostColor = ghost.valid ? COLORS.gold : "#b04030";
       c.globalAlpha = 0.55;
-      c.fillStyle = ghost.valid ? COLORS.gold : "#b04030";
-      c.fillRect(ghost.tx * TILE_SIZE + 4, ghost.ty * TILE_SIZE + 4, TILE_SIZE - 8, TILE_SIZE - 8);
+      fillHex(px, py, HEX_SIZE * 0.78, ghostColor);
       c.globalAlpha = 1;
-      c.lineWidth = 2;
-      c.strokeStyle = ghost.valid ? COLORS.gold : "#b04030";
-      c.strokeRect(ghost.tx * TILE_SIZE + 4, ghost.ty * TILE_SIZE + 4, TILE_SIZE - 8, TILE_SIZE - 8);
+      strokeHex(px, py, HEX_SIZE * 0.78, ghostColor, 2);
     }
 
+    // Units.
     const selected = new Set(view.selection);
-    const radius = TILE_SIZE * 0.35;
+    const unitRadius = HEX_SIZE * 0.5;
     for (const u of Object.values(state.units)) {
-      // Units inside a building are hidden from the map; the building's
-      // status pip stands in for them while they work (req §7.2/§7.3).
-      if (u.insideBuildingId !== null) continue;
-      const cx = (u.x + 0.5) * TILE_SIZE;
-      const cy = (u.y + 0.5) * TILE_SIZE;
+      if (u.insideBuildingId !== null) continue; // hidden while operating
+      const { px, py } = hexToPixel(u.x, u.y);
       c.beginPath();
-      c.arc(cx, cy, radius, 0, Math.PI * 2);
+      c.arc(px, py, unitRadius, 0, Math.PI * 2);
       c.fillStyle =
         u.kind === "soldier" ? "#b89678"
         : u.kind === "captain" ? "#d4af37"
@@ -210,16 +276,15 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
       c.lineWidth = 2;
       c.strokeStyle = COLORS.unitOutline;
       c.stroke();
-      // Carry cue: a gold pip when the unit is holding resources (req §8.1).
       if (carriedTotal(u.carrying) > 0) {
         c.beginPath();
-        c.arc(cx, cy - radius, radius * 0.35, 0, Math.PI * 2);
+        c.arc(px, py - unitRadius, unitRadius * 0.35, 0, Math.PI * 2);
         c.fillStyle = COLORS.carryCue;
         c.fill();
       }
       if (selected.has(u.id)) {
         c.beginPath();
-        c.arc(cx, cy, radius + 4, 0, Math.PI * 2);
+        c.arc(px, py, unitRadius + 4, 0, Math.PI * 2);
         c.strokeStyle = COLORS.selectionRing;
         c.lineWidth = 2;
         c.stroke();
@@ -241,3 +306,7 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
 
   return { render, resize };
 }
+
+// Re-export the hex geometry constants for any callers that need them outside
+// the render module (currently just the test harness).
+export { HEX_HEIGHT, HEX_HORIZ_SPACING, HEX_VERT_SPACING, HEX_WIDTH };

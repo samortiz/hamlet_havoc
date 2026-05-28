@@ -5,15 +5,17 @@
 
 import { expect, test, type Page } from "@playwright/test";
 
-// Must match config TILE_SIZE (req §3.2). Hardcoded so the test stays in the
+// Must match config HEX_SIZE (req §4.1). Hardcoded so the test stays in the
 // browser-coordinate space without exposing the constant on the debug hook.
-const TILE = 32;
+const HEX_SIZE = 40;
+const HEX_WIDTH = Math.sqrt(3) * HEX_SIZE;
+const HEX_VERT_SPACING = 1.5 * HEX_SIZE;
 
 async function ticks(page: Page): Promise<number> {
   return page.evaluate(() => window.__game!.getState().tickCount);
 }
 
-// First unit's id + tile position and the current camera, used to map a tile to
+// First unit's id + hex position and the current camera, used to map a hex to
 // the on-screen pixel the player would click.
 async function firstUnit(page: Page) {
   return page.evaluate(() => {
@@ -26,12 +28,18 @@ async function firstUnit(page: Page) {
   });
 }
 
+// Convert an odd-r hex coord to a world-pixel center, then to a screen point
+// inside the canvas. Mirrors src/game/hex.ts:hexToPixel for the simple
+// integer-row case (sufficient because tests only pass integer hex coords).
 async function screenPoint(page: Page, tileX: number, tileY: number, cam: { x: number; y: number }) {
   const box = await page.locator("#world").boundingBox();
   if (!box) throw new Error("#world canvas has no bounding box");
+  const rowShift = (tileY & 1) * 0.5 * HEX_WIDTH;
+  const px = (tileX + 0.5) * HEX_WIDTH + rowShift;
+  const py = HEX_SIZE + tileY * HEX_VERT_SPACING;
   return {
-    px: box.x + (tileX + 0.5) * TILE - cam.x,
-    py: box.y + (tileY + 0.5) * TILE - cam.y,
+    px: box.x + px - cam.x,
+    py: box.y + py - cam.y,
   };
 }
 

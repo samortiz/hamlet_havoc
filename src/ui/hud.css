@@ -109,31 +109,82 @@ body {
   color: var(--parchment);
 }
 
-/* Build menu legend (req §19.1) — mirrors the keys in controls.ts. */
-#hud-build-menu {
+/* Unit tooltip */
+#unit-tooltip {
   position: absolute;
-  bottom: 10px;
-  left: 12px;
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-  align-items: center;
-  padding: 6px 10px;
-  background: rgba(28, 35, 22, 0.88);
+  pointer-events: none;
+  padding: 8px 12px;
+  background: rgba(20, 28, 16, 0.96);
   border: 1px solid var(--gold);
   border-radius: 4px;
   font-size: 12px;
   color: var(--parchment);
-  max-width: 60%;
+  min-width: 140px;
+  line-height: 1.6;
+  z-index: 20;
 }
 
-#hud-build-menu strong {
+#tt-title {
+  font-weight: 700;
   color: var(--gold);
-  margin-right: 4px;
+  font-size: 13px;
 }
 
-#hud-build-menu .sep {
-  opacity: 0.4;
+/* Action panel: clickable build + context buttons */
+#action-panel {
+  position: absolute;
+  bottom: 10px;
+  left: 12px;
+  right: 130px;
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  pointer-events: auto;
+}
+
+.ap-section {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  align-items: center;
+  padding: 5px 8px;
+  background: rgba(28, 35, 22, 0.90);
+  border: 1px solid var(--gold);
+  border-radius: 4px;
+  font-size: 12px;
+  color: var(--parchment);
+}
+
+.ap-label {
+  color: var(--gold);
+  font-weight: 700;
+  margin-right: 2px;
+  white-space: nowrap;
+}
+
+.ap-section button {
+  font: inherit;
+  font-size: 11px;
+  color: var(--parchment);
+  background: rgba(44, 55, 33, 0.9);
+  border: 1px solid rgba(212, 175, 55, 0.45);
+  border-radius: 3px;
+  padding: 3px 8px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.ap-section button:hover {
+  background: var(--brown-dark);
+  border-color: var(--gold);
+}
+
+.ap-section button.active {
+  background: var(--gold);
+  color: #1c2316;
+  border-color: var(--gold);
+  font-weight: 700;
 }
 
 /* Save / load controls — the one part of the HUD that takes pointer events. */

@@ -40,6 +40,7 @@ import {
 } from "./buildings.js";
 import type { BuildableKind } from "./commands.js";
 import { fieldAt, makeField, type Field } from "./fields.js";
+import { hexNeighbors } from "./hex.js";
 import {
   forestRemaining,
   inBounds,
@@ -151,14 +152,10 @@ function classifyGather(
     return { resource: "ore", work: { x: tx, y: ty } };
   }
   if (tile === "water") {
-    // Fish from a reachable land tile adjacent to the water (req §14). Prefer the
-    // neighbour closest to the unit that has a valid path.
-    const neighbours: TileCoord[] = [
-      { x: tx + 1, y: ty },
-      { x: tx - 1, y: ty },
-      { x: tx, y: ty + 1 },
-      { x: tx, y: ty - 1 },
-    ].sort(
+    // Fish from a reachable land hex adjacent to the water (req §14). On a
+    // hex grid that means one of the 6 hex neighbours; pick the closest one
+    // (offset-coord Euclidean) that has a valid path from the unit.
+    const neighbours = hexNeighbors(tx, ty).sort(
       (a, b) =>
         (a.x - unit.x) ** 2 + (a.y - unit.y) ** 2 -
         ((b.x - unit.x) ** 2 + (b.y - unit.y) ** 2),

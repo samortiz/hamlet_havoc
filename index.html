@@ -30,31 +30,22 @@
           <span id="hud-population">Pop W:0/0 · S:0 · C:0/0</span>
           <span id="hud-equipment">Sword:0 · Shield:0</span>
         </div>
-        <!-- Build menu (req §19.1). Keyboard-driven in v1; the list is a -->
-        <!-- legend that mirrors the placement keys in controls.ts. -->
-        <div id="hud-build-menu">
-          <strong>Build:</strong>
-          <span>1 House</span>
-          <span>2 Barn</span>
-          <span>3 Smithy</span>
-          <span>4 Barracks</span>
-          <span>5 Mine</span>
-          <span>6 Hay</span>
-          <span>F Plough</span>
-          <span class="sep">|</span>
-          <span>X Demolish</span>
-          <span>R Repair</span>
-          <span>K Sword</span>
-          <span>L Shield</span>
-          <span>T Train</span>
-          <span>C Cancel</span>
-        </div>
+        <!-- Action panel: build buttons + context-sensitive unit/building actions. -->
+        <!-- Populated by controls.ts; pointer-events enabled so buttons are clickable. -->
+        <div id="action-panel"></div>
         <div id="hud-controls">
           <button id="btn-new" type="button">New</button>
           <button id="btn-save" type="button">Save</button>
           <button id="btn-load" type="button">Load</button>
         </div>
         <div id="hud-toast" hidden></div>
+        <!-- Unit tooltip: shown on hover; positioned by hud.ts. -->
+        <div id="unit-tooltip" hidden>
+          <div id="tt-title"></div>
+          <div id="tt-hp"></div>
+          <div id="tt-order"></div>
+          <div id="tt-carry" hidden></div>
+        </div>
         <div id="hud-debug">
           <span id="hud-tick">tick 0</span>
         </div>

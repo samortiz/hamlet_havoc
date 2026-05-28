@@ -18,6 +18,7 @@
 - Target resolution: 1280×720 baseline, scalable to fit window.
 - Target frame rate: 30–60 FPS.
 - No minimap.
+- The board is a **pointy-top hexagonal grid** (req §4.1). Pixel↔hex math lives in `src/game/hex.ts`.
 
 ### 2.3 Code Structure (suggested)
 - `main.js` — bootstrap, game loop
@@ -64,9 +65,9 @@
 - **Runtime vs. dev dependencies:** the "no external runtime dependencies" rule (§24) refers to what ships. TypeScript, Vite, and Vitest are dev dependencies that compile/bundle away to the plain static files that are delivered, so they do not violate it.
 
 ### 2.9 Rendering Performance
-To meet the ≥30 FPS target (§24) on a 40×60 grid:
+To meet the ≥30 FPS target (§24) on a 40×40 hex grid:
 - Render the static terrain layer **once to an offscreen canvas** and blit it per frame, redrawing only when terrain changes (forest cleared, building placed/destroyed).
-- **Cull to the visible viewport** — only draw tiles/entities within the camera bounds.
+- **Cull to the visible viewport** — only draw hexes/entities within the camera bounds (sample the viewport corners via `pixelToHex` to derive a hex range).
 - Load all sprites from a **single texture atlas**, with a **preload step** before the intro screen (supports the 5-second load NFR).
 
 ### 2.10 Testing
@@ -87,7 +88,7 @@ Two layers, matching the sim/render split:
 ### 3.2 Graphics
 - Sprite-based 2D graphics for all units, buildings, and terrain tiles.
 - **Placeholder, hand-drawn-style graphics for v1** — final art assets are not provided.
-- Tile size: 32×32 pixels
+- Tiles are pointy-top hexes with circumradius `HEX_SIZE = 20` px (per-hex footprint ≈ 35 wide × 40 tall).
 - Each unit has at least: an idle sprite and an action sprite (working/fighting).
 - **v1 uses static sprites** — unit movement is position change only; frame-based animation is deferred to a future update.
 
@@ -96,9 +97,10 @@ Two layers, matching the sim/render split:
 ## 4. Map
 
 ### 4.1 Generation
-- Procedurally generated each new game using tile-based generation.
-- Default map size: 40×60 tiles 
+- Procedurally generated each new game using hex-based generation.
+- Default map size: **40 × 40 hexes** (pointy-top, odd-r offset coordinates).
 - Map is bounded; no scrolling beyond edges.
+- "Adjacent" throughout this document means **hex-adjacent** — one of the 6 neighbors on the odd-r grid, at hex-distance 1.
 
 ### 4.2 Tile Types
 | Tile     | Walkable | Activities                          | Buildable On |
@@ -169,7 +171,7 @@ A new game initializes with:
 ### 6.5 Selection, Movement & Orders
 - Player selects unit(s) by clicking (single) or drag-box (multiple).
 - **Base movement speed: 2 tiles/second** (tunable — see §26); a horse doubles it.
-- Movement uses pathfinding (A\* recommended) on the walkable tile grid. **Walkability is dynamic:** clearing forest, placing/destroying a building, and building a mine all change which tiles are passable, so paths recompute when the grid changes. Buildings occupy and block their tiles.
+- Movement uses pathfinding (6-direction hex A\* with uniform per-hop cost and a hex-distance heuristic) on the walkable hex grid. **Walkability is dynamic:** clearing forest, placing/destroying a building, and building a mine all change which hexes are passable, so paths recompute when the grid changes. Buildings occupy and block their hex.
 - **Orders (unit task model):** each unit holds a current order with a target and runs a small state machine. Orders: `Move`, `Gather` (wood/fish/mine), `Build`, `Plough`, `Plant`, `Harvest`, `Train`, `Trade`, `Attack`, `Idle`. A gather/build order cycles through sub-states (move-to-target → work → when full, move-to-storage → deposit → repeat) and continues until interrupted, the target is exhausted/invalid, or a season lock makes it invalid.
 - **Right-click target resolution** (context-sensitive): empty walkable tile → Move; a work target (forest, water-adjacent tile, mine, ploughable/plantable/harvestable tile, construction site) → the matching work order if the unit's type permits it; enemy unit → Attack; own smithy/barracks → enter to operate/train.
 - **Auto-attack:** idle soldiers and captains automatically attack an adjacent enemy; workers defend if attacked but do not seek out enemies. A unit on an explicit order does not break off to chase enemies unless ordered.
@@ -523,10 +525,12 @@ All prior open design questions have been resolved and folded into the sections 
 | Per-event tax amounts & scaling        | §16.2     | Defined per event                |
 | Per-event enemy counts & type mix      | §16.1     | Defined per event                |
 | Misc event magnitudes & full roster    | §16.3     | TBD (table to be filled in)      |
-| Base unit movement speed               | §6.5      | 2 tiles / sec                    |
+| Base unit movement speed               | §6.5      | 2 hexes / sec                    |
 | Barracks housing capacity              | §7.4      | 4 soldiers/captains per barracks |
 | Enemy loot drop rates                  | §6.1      | TBD (e.g., goblin gold chance)   |
-| Goblin spawn count & placement at mine | §13.2     | TBD (count near the mine tile)   |
+| Goblin spawn count & placement at mine | §13.2     | TBD (count near the mine hex)    |
+| Hex size (circumradius, px)            | §3.2/§4.1 | 20 (hex ≈ 35×40 px)              |
+| Map size                               | §4.1      | 40 × 40 hexes                    |
 
 ---
 
