@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Hamlet Havoc</title>
+    <link rel="stylesheet" href="/src/ui/hud.css" />
+  </head>
+  <body>
+    <div id="game">
+      <canvas id="world"></canvas>
+
+      <!-- HUD overlay (HTML/CSS, drawn above the canvas — see req §2.2) -->
+      <div id="hud">
+        <div id="hud-top">
+          <span id="hud-season">Spring, Year 1</span>
+          <span id="hud-timer">60s</span>
+          <span id="hud-paused" hidden>PAUSED</span>
+        </div>
+        <div id="hud-debug">
+          <span id="hud-tick">tick 0</span>
+        </div>
+      </div>
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
