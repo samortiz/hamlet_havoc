@@ -10,7 +10,7 @@ function makeMap(rows: string[]): GameMap {
   for (const row of rows) {
     for (const ch of row) tiles.push(ch === "~" ? "water" : "grass");
   }
-  return { width, height, tiles };
+  return { width, height, tiles, forestWood: {}, mineType: {} };
 }
 
 describe("findPath", () => {

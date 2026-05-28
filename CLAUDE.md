@@ -8,39 +8,53 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Running the Game
 
-No build step required. Open `index.html` directly or serve via a local HTTP server (required for ES modules):
+This is a **TypeScript + Vite** project during development. TypeScript, Vite, and Vitest are dev-only dependencies — they compile and bundle away (`npm run build`) to the **plain static HTML/JS/CSS** that actually ships (req §2.8). There are no runtime dependencies in the shipped output.
 
 ```bash
-python3 -m http.server 8080
-# then open http://localhost:8080
+npm install        # one-time
+npm run dev        # Vite dev server with HMR
+npm run build      # type-check (tsc --noEmit) + production bundle to dist/
+npm run preview    # serve the production build
+npm test           # run the Vitest headless sim tests
+npm run typecheck  # tsc --noEmit only
 ```
 
 ## Architecture
 
-Pure client-side static files: `index.html`, JS modules, CSS, and assets. No backend, no npm, no bundler.
+Client-side game authored in TypeScript modules under `src/`, bundled by Vite into static files for delivery. No backend. The simulation core (`game/`) is decoupled from rendering and input (req §2.6): it imports nothing from `render/` or `ui/`, holds no DOM/canvas references, and advances as a pure `update(state, commands, dtTicks) → state`. State is plain, id-based, JSON-serializable data; all randomness draws from a single seeded PRNG stored in state.
 
-### Suggested Module Structure
+### Module Structure (actual)
 
 ```
-main.js              — bootstrap, game loop (fixed 30 ticks/sec update + render)
-game/
-  gameState.js       — central state object (single source of truth)
-  map.js             — 40×60 tile map, procedural generation
-  units.js           — unit definitions and behavior
-  buildings.js       — building definitions and construction
-  actions.js         — action handling (plough, plant, mine, fish, chop, build)
-  season.js          — season/year progression, upkeep at season end
-  events.js          — end-of-year event system
-  combat.js          — combat resolution (1 attack/sec, damage = roll(min,max) - defense)
-  ai.js              — enemy pathfinding and targeting
-ui/
-  hud.js             — HUD elements (resource bar, season timer, event display)
-  input.js           — mouse (click/drag-select/right-click) and keyboard handlers
-render/
-  renderer.js        — canvas drawing
-  sprites.js         — sprite management
-assets/              — sprites and tile graphics (placeholder hand-drawn style)
+src/
+  main.ts            — bootstrap; fixed-timestep loop (30 ticks/sec) decoupled from render
+  config/
+    index.ts         — tunable constants (durations→ticks, map size, palette); single source of truth (§2.6, §26)
+  game/              — simulation core (imports nothing from render/ or ui/)
+    state.ts         — central GameState, initial state, season derivation
+    map.ts           — 40×60 tile map + procedural generation + per-tile forest/mine state
+    rng.ts           — seeded PRNG (mulberry32); state lives in GameState
+    pathfinding.ts   — hand-written grid A* on walkable tiles
+    units.ts         — unit definitions and order/task model
+    resources.ts     — resource types, values, pool/inventory helpers
+    buildings.ts     — building kinds, storage, nearest-storage lookup
+    fields.ts        — farm field tile feature (ploughed/planted/grown)
+    actions.ts       — order state machines (gather/farming) + helpers
+    commands.ts      — command types (the only input→sim channel)
+    update.ts        — stateless step: update(state, commands, dtTicks) → state
+    persistence.ts   — JSON serialize/deserialize for save/load
+  render/
+    renderer.ts      — canvas drawing; reads state, never mutates it
+  ui/
+    camera.ts        — camera/view state + screen↔tile transforms (not saved)
+    controls.ts      — mouse/keyboard input, selection, command emission
+    hud.ts           — HUD overlay updates (reads state)
+    hud.css          — HUD + layout styles
+index.html           — canvas + HUD overlay shell; loads /src/main.ts
+test/                — Vitest headless simulation tests
 ```
+
+> Seasons/upkeep, combat, enemy AI, the full construction system, and end-of-year events are still to come (M3–M6). Final art assets are not provided; v1 uses placeholder hand-drawn-style sprites (req §3.2).
 
 ### Rendering
 
@@ -104,7 +118,7 @@ LocalStorage auto-save and manual save. JSON-serialized game state. No save slot
 - Announced at year start (type only; magnitude hidden until event triggers).
 - **Attack**: Enemies scale in count/type based on hamlet metrics (population, buildings, etc.).
 - **Tax**: Demanded in gold; shortfall paid at double rate in other resources (player selects); remaining shortfall destroys buildings (player selects which).
-- **Misc**: See events table in `game/events.js` for the full library.
+- **Misc**: See events table in `game/events.ts` for the full library.
 
 ### Town
 - A fixed location on the map edge (far from Main Hall). Units walk there carrying goods.

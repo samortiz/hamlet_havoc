@@ -1,49 +1,25 @@
 // The simulation core (req §2.6). A stateless, deterministic step:
 // update(state, commands, dtTicks) -> newState. Imports nothing from render/ or
 // ui/ and touches no DOM, so it runs headless in tests and serializes cleanly.
+//
+// Each step copies the mutable parts of state into a SimCtx, lets the command
+// handlers set unit orders and the action systems advance them (mutating the
+// context), then assembles the next immutable GameState. The previous state is
+// never mutated.
 
-import { BASE_MOVE_TILES_PER_SEC, TICKS_PER_SECOND } from "../config/index.js";
+import {
+  advanceFieldGrowth,
+  advanceUnit,
+  startField,
+  startGather,
+  startMove,
+  type SimCtx,
+} from "./actions.js";
+import { storageCapacity } from "./buildings.js";
 import type { Command } from "./commands.js";
-import { findPath } from "./pathfinding.js";
+import type { GameMap } from "./map.js";
 import type { GameState } from "./state.js";
 import type { Unit } from "./units.js";
-
-const TILES_PER_TICK = BASE_MOVE_TILES_PER_SEC / TICKS_PER_SECOND;
-
-// Move a unit along its path by its movement budget for dtTicks. The budget
-// loop keeps speed constant regardless of how path nodes line up with ticks.
-function advanceUnit(unit: Unit, dtTicks: number): Unit {
-  if (unit.order.type !== "move") return unit;
-  const path = unit.order.path;
-  let node = unit.order.node;
-  let x = unit.x;
-  let y = unit.y;
-  let budget = TILES_PER_TICK * dtTicks;
-
-  while (budget > 0 && node < path.length) {
-    const t = path[node];
-    const dx = t.x - x;
-    const dy = t.y - y;
-    const dist = Math.hypot(dx, dy);
-    if (dist === 0) {
-      node++;
-      continue;
-    }
-    if (dist <= budget) {
-      x = t.x;
-      y = t.y;
-      node++;
-      budget -= dist;
-    } else {
-      x += (dx / dist) * budget;
-      y += (dy / dist) * budget;
-      budget = 0;
-    }
-  }
-
-  if (node >= path.length) return { ...unit, x, y, order: { type: "idle" } };
-  return { ...unit, x, y, order: { type: "move", path, node } };
-}
 
 export function update(
   state: GameState,
@@ -52,25 +28,57 @@ export function update(
 ): GameState {
   const units: Record<number, Unit> = { ...state.units };
 
+  // Copy the mutable containers; the action systems write through `ctx`.
+  const map: GameMap = {
+    width: state.map.width,
+    height: state.map.height,
+    tiles: state.map.tiles.slice(),
+    forestWood: { ...state.map.forestWood },
+    mineType: { ...state.map.mineType },
+  };
+  const ctx: SimCtx = {
+    map,
+    resources: { ...state.resources },
+    capacity: storageCapacity(state.buildings),
+    buildings: state.buildings, // unchanged in M2 (construction is M3)
+    fields: { ...state.fields },
+    rngState: state.rngState,
+    tickCount: state.tickCount + dtTicks,
+    nextId: state.nextEntityId,
+  };
+
+  // 1) Commands become unit orders (pathfinding happens here, on the new map).
   for (const cmd of commands) {
-    if (cmd.type === "moveUnits") {
-      for (const id of cmd.unitIds) {
-        const u = units[id];
-        if (!u) continue;
-        const start = { x: Math.round(u.x), y: Math.round(u.y) };
-        const path = findPath(state.map, start, { x: cmd.tx, y: cmd.ty });
-        units[id] =
-          path && path.length > 0
-            ? { ...u, order: { type: "move", path, node: 0 } }
-            : { ...u, order: { type: "idle" } };
+    for (const id of cmd.unitIds) {
+      const u = units[id];
+      if (!u) continue;
+      if (cmd.type === "moveUnits") {
+        units[id] = { ...u, order: startMove(map, u, cmd.tx, cmd.ty) };
+      } else if (cmd.type === "gather") {
+        units[id] = { ...u, order: startGather(map, u, cmd.tx, cmd.ty) };
+      } else {
+        units[id] = { ...u, order: startField(map, u, cmd.action, cmd.tx, cmd.ty) };
       }
     }
   }
 
+  // 2) Advance every unit's order by dtTicks.
   for (const key of Object.keys(units)) {
     const id = Number(key);
-    units[id] = advanceUnit(units[id], dtTicks);
+    units[id] = advanceUnit(units[id], dtTicks, ctx);
   }
 
-  return { ...state, units, tickCount: state.tickCount + dtTicks };
+  // 3) Mature any planted crops that have grown long enough.
+  advanceFieldGrowth(ctx);
+
+  return {
+    ...state,
+    map,
+    units,
+    fields: ctx.fields,
+    resources: ctx.resources,
+    rngState: ctx.rngState,
+    nextEntityId: ctx.nextId,
+    tickCount: ctx.tickCount,
+  };
 }

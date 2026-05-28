@@ -10,7 +10,8 @@ import {
   TILE_SIZE,
 } from "../config/index.js";
 import type { Command } from "../game/commands.js";
-import { HAMLET_CENTER } from "../game/map.js";
+import { fieldAt } from "../game/fields.js";
+import { HAMLET_CENTER, inBounds, tileAt } from "../game/map.js";
 import type { GameState } from "../game/state.js";
 import {
   centerOnTile,
@@ -94,6 +95,27 @@ export function createControls(opts: {
     return best;
   }
 
+  // Right-click target resolution (req §6.5): the tile under the cursor decides
+  // the order — resource tile → gather, ploughed/grown field → plant/harvest,
+  // otherwise a plain move. Ploughing is not a default right-click (every grass
+  // tile is ploughable); it is bound to the F key below.
+  function rightClickCommand(tx: number, ty: number): Command | null {
+    if (selection.length === 0) return null;
+    const s = getState();
+    if (!inBounds(s.map, tx, ty)) return null;
+    const ids = [...selection];
+    const t = tileAt(s.map, tx, ty);
+    if (t === "forest" || t === "mountain" || t === "water") {
+      return { type: "gather", unitIds: ids, tx, ty };
+    }
+    const f = fieldAt(s.fields, tx, ty);
+    if (f) {
+      if (f.stage === "ploughed") return { type: "field", unitIds: ids, action: "plant", tx, ty };
+      if (f.stage === "grown") return { type: "field", unitIds: ids, action: "harvest", tx, ty };
+    }
+    return { type: "moveUnits", unitIds: ids, tx, ty };
+  }
+
   function boxSelect(): void {
     const x0 = Math.min(drag.startX, drag.curX) + camera.x;
     const y0 = Math.min(drag.startY, drag.curY) + camera.y;
@@ -140,10 +162,9 @@ export function createControls(opts: {
       drag.moved = false;
     } else if (e.button === 2) {
       e.preventDefault();
-      if (selection.length > 0) {
-        const tile = screenToTile(camera, p.x, p.y);
-        enqueue({ type: "moveUnits", unitIds: [...selection], tx: tile.x, ty: tile.y });
-      }
+      const tile = screenToTile(camera, p.x, p.y);
+      const cmd = rightClickCommand(tile.x, tile.y);
+      if (cmd) enqueue(cmd);
     }
   });
 
@@ -167,6 +188,18 @@ export function createControls(opts: {
     }
     if (e.code === "Escape") {
       selection = [];
+      return;
+    }
+    // F: plough the grass tile under the cursor with the selected units (req §10).
+    if (e.code === "KeyF") {
+      if (selection.length > 0 && mouse.inside) {
+        const tile = screenToTile(camera, mouse.x, mouse.y);
+        const s = getState();
+        const t = tileAt(s.map, tile.x, tile.y);
+        if ((t === "grass" || t === "stump") && !fieldAt(s.fields, tile.x, tile.y)) {
+          enqueue({ type: "field", unitIds: [...selection], action: "plough", tx: tile.x, ty: tile.y });
+        }
+      }
       return;
     }
     if (PAN_KEYS[e.code]) {

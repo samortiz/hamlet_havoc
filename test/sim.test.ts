@@ -90,6 +90,35 @@ describe("save / load", () => {
   it("rejects an unknown save version", () => {
     expect(() => deserialize(JSON.stringify({ version: 999 }))).toThrow();
   });
+
+  it("round-trips a state that has gathered resources and a depleted forest", () => {
+    let state = createInitialState(2024);
+    const id = Number(Object.keys(state.units)[0]);
+    const u = state.units[id];
+    // Find any forest tile to gather from.
+    let forest: { x: number; y: number } | null = null;
+    for (let y = 0; y < state.map.height && !forest; y++) {
+      for (let x = 0; x < state.map.width; x++) {
+        if (state.map.tiles[y * state.map.width + x] === "forest") {
+          forest = { x, y };
+          break;
+        }
+      }
+    }
+    state = update(
+      state,
+      [{ type: "gather", unitIds: [id], tx: forest!.x, ty: forest!.y }],
+      1,
+    );
+    // Long enough to walk + chop + deplete + carry/deposit something.
+    state = update(state, [], 30 * 200);
+    expect(state.resources.wood).toBeGreaterThan(0);
+    expect(state.units[id].order.type).not.toBe(undefined);
+    expect(u).not.toBe(state.units[id]);
+
+    const restored = deserialize(serialize(state));
+    expect(restored).toEqual(state);
+  });
 });
 
 describe("deriveSeason", () => {

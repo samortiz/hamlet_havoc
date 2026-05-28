@@ -3,6 +3,7 @@
 // by the seeded RNG (req §2.6) so a given seed always yields the same world.
 
 import {
+  FOREST_WOOD_MAX,
   HAMLET_CLEARING_RADIUS,
   MAP_HEIGHT,
   MAP_WIDTH,
@@ -10,7 +11,12 @@ import {
 } from "../config/index.js";
 import { rngInt } from "./rng.js";
 
-export type TileType = "grass" | "forest" | "water" | "mountain";
+// "stump" is a depleted forest tile: walkable, no more wood, and (from M4)
+// regrows to forest at spring (req §4.2, §12).
+export type TileType = "grass" | "forest" | "water" | "mountain" | "stump";
+
+// Mine type assigned to a mountain tile the first time it is mined (req §13.1).
+export type MineType = "stone" | "iron" | "gold";
 
 export interface TileCoord {
   x: number;
@@ -21,6 +27,12 @@ export interface GameMap {
   width: number;
   height: number;
   tiles: TileType[]; // row-major, length = width * height
+  // Per-tile mutable gathering state, keyed by tile index. Sparse: a missing
+  // forest entry means "full" (FOREST_WOOD_MAX); a missing mountain entry means
+  // "type not yet rolled". Kept out of `tiles` so depletion/typing serialize
+  // without bloating the terrain array.
+  forestWood: Record<number, number>;
+  mineType: Record<number, MineType>;
 }
 
 export const HAMLET_CENTER: TileCoord = {
@@ -46,6 +58,20 @@ export function countTiles(map: GameMap, type: TileType): number {
   let c = 0;
   for (const t of map.tiles) if (t === type) c++;
   return c;
+}
+
+// Wood left on a forest tile; a missing entry means the tile is full (req §12).
+export function forestRemaining(map: GameMap, idx: number): number {
+  return map.forestWood[idx] ?? FOREST_WOOD_MAX;
+}
+
+// A land tile adjacent (4-way) to at least one water tile can fish (req §14).
+export function isWaterAdjacent(map: GameMap, x: number, y: number): boolean {
+  for (const [dx, dy] of NEIGHBORS4) {
+    if (inBounds(map, x + dx, y + dy) && tileAt(map, x + dx, y + dy) === "water")
+      return true;
+  }
+  return false;
 }
 
 function inClearing(x: number, y: number, radius: number): boolean {
@@ -157,5 +183,8 @@ export function generateMap(rngState: number): {
   res = scatter(tiles, "water", Math.round(TERRAIN_TARGET.water * n), 5, 12, seeded.water, rng);
   rng = res.rngState;
 
-  return { map: { width: MAP_WIDTH, height: MAP_HEIGHT, tiles }, rngState: rng };
+  return {
+    map: { width: MAP_WIDTH, height: MAP_HEIGHT, tiles, forestWood: {}, mineType: {} },
+    rngState: rng,
+  };
 }

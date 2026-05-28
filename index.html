@@ -4,6 +4,10 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Hamlet Havoc</title>
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%234a5d3a'/%3E%3Crect x='4' y='3' width='8' height='10' rx='1' fill='%23d4af37'/%3E%3C/svg%3E"
+    />
     <link rel="stylesheet" href="/src/ui/hud.css" />
   </head>
   <body>
@@ -17,6 +21,16 @@
           <span id="hud-timer">60s</span>
           <span id="hud-paused" hidden>PAUSED</span>
         </div>
+        <!-- Resource bar + pooled storage (req §19.1); cells filled in by hud.ts -->
+        <div id="hud-resources">
+          <span id="hud-storage" class="res-storage">Storage 0/0</span>
+        </div>
+        <div id="hud-controls">
+          <button id="btn-new" type="button">New</button>
+          <button id="btn-save" type="button">Save</button>
+          <button id="btn-load" type="button">Load</button>
+        </div>
+        <div id="hud-toast" hidden></div>
         <div id="hud-debug">
           <span id="hud-tick">tick 0</span>
         </div>

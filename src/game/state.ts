@@ -4,15 +4,21 @@
 
 import {
   SEASONS,
+  STARTING_WHEAT,
   TICKS_PER_SEASON,
   TICKS_PER_SECOND,
   TICKS_PER_YEAR,
   type Season,
 } from "../config/index.js";
+import { makeBuilding, type Building, type BuildingKind } from "./buildings.js";
+import type { Field } from "./fields.js";
 import { generateMap, HAMLET_CENTER, type GameMap } from "./map.js";
+import { emptyPool, type ResourcePool } from "./resources.js";
 import { makeWorker, type Unit } from "./units.js";
 
-export const SAVE_VERSION = 1;
+// Bumped to 2 in M2: state gained buildings/fields/resources, so M1 saves are
+// no longer loadable and are rejected by deserialize().
+export const SAVE_VERSION = 2;
 
 export interface GameState {
   version: number;
@@ -23,24 +29,46 @@ export interface GameState {
   nextEntityId: number;
   map: GameMap;
   units: Record<number, Unit>;
+  buildings: Record<number, Building>;
+  fields: Record<number, Field>;
+  resources: ResourcePool;
 }
 
 export function createInitialState(seed: number): GameState {
   const gen = generateMap(seed >>> 0);
   const units: Record<number, Unit> = {};
+  const buildings: Record<number, Building> = {};
   let nextEntityId = 1;
 
-  // 4 starting workers in the hamlet clearing (req §5). Buildings arrive in M3.
-  const offsets: ReadonlyArray<readonly [number, number]> = [
-    [0, 0],
-    [1, 0],
-    [0, 1],
-    [1, 1],
+  const cx = HAMLET_CENTER.x;
+  const cy = HAMLET_CENTER.y;
+
+  // Starting hamlet (req §5): 1 Main Hall + 2 Houses, laid out in the grass
+  // clearing. These provide the initial pooled storage and drop-off points.
+  const placements: ReadonlyArray<{ kind: BuildingKind; x: number; y: number }> = [
+    { kind: "mainHall", x: cx, y: cy },
+    { kind: "house", x: cx - 2, y: cy },
+    { kind: "house", x: cx + 2, y: cy },
   ];
-  for (const [dx, dy] of offsets) {
+  for (const p of placements) {
     const id = nextEntityId++;
-    units[id] = makeWorker(id, HAMLET_CENTER.x + dx, HAMLET_CENTER.y + dy);
+    buildings[id] = makeBuilding(id, p.kind, p.x, p.y);
   }
+
+  // 4 starting workers on open clearing tiles around the buildings.
+  const workerTiles: ReadonlyArray<readonly [number, number]> = [
+    [cx - 1, cy + 2],
+    [cx, cy + 2],
+    [cx + 1, cy + 2],
+    [cx, cy - 2],
+  ];
+  for (const [x, y] of workerTiles) {
+    const id = nextEntityId++;
+    units[id] = makeWorker(id, x, y);
+  }
+
+  const resources = emptyPool();
+  resources.wheat = STARTING_WHEAT;
 
   return {
     version: SAVE_VERSION,
@@ -49,6 +77,9 @@ export function createInitialState(seed: number): GameState {
     nextEntityId,
     map: gen.map,
     units,
+    buildings,
+    fields: {},
+    resources,
   };
 }
 

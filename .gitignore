@@ -1,3 +1,10 @@
+# Playwright (browser play-test artifacts)
+/test-results/
+/playwright-report/
+/e2e/artifacts/
+/blob-report/
+/.playwright/
+
 # Logs
 logs
 *.log
