@@ -17,16 +17,15 @@ export type GatherResource = "wood" | "fish" | "ore";
 
 export type FieldAction = "plough" | "plant" | "harvest";
 
-// What an `operate` order does inside the building (req §7.2, §7.3, §13).
+// What an `operate` order does inside the building (req §7.2, §7.3).
 // `craftSword`/`craftShield`: smithy production loop.
 // `trainSoldier`/`trainCaptain`: barracks promotion of the unit doing the order.
-// `mine`: enter a Mine and pull ore until carry-cap full, then go deposit.
+// (Mining is a `gather` order — see GatherResource "ore" — not an operate mode.)
 export type OperateMode =
   | "craftSword"
   | "craftShield"
   | "trainSoldier"
-  | "trainCaptain"
-  | "mine";
+  | "trainCaptain";
 
 export type Order =
   | { type: "idle" }
@@ -65,10 +64,10 @@ export type Order =
       path: TileCoord[];
       node: number;
     }
-  // Smithy crafting / barracks training / mining (req §7.2, §7.3, §13).
+  // Smithy crafting / barracks training (req §7.2, §7.3).
   // Walk to the building's tile, then "enter" by setting Unit.insideBuildingId.
   // While inside, the building's per-step logic ticks craft/train progress and
-  // posts the result (equipment counters, kind transitions, ore yields).
+  // posts the result (equipment counters, kind transitions).
   | {
       type: "operate";
       buildingId: number;
@@ -76,7 +75,7 @@ export type Order =
       phase: "toBuilding" | "inside" | "toStore" | "storing";
       path: TileCoord[];
       node: number;
-      storeId: number | null; // used by mine operators while depositing
+      storeId: number | null;
     };
 
 export interface Unit {

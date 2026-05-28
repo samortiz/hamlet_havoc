@@ -61,7 +61,6 @@ function describeOrder(order: Order): string {
       return order.phase === "toSite" ? "Going to build" : "Building";
     case "operate":
       switch (order.mode) {
-        case "mine": return "Mining";
         case "craftSword": return "Crafting sword";
         case "craftShield": return "Crafting shield";
         case "trainSoldier": return "Training → soldier";
@@ -165,8 +164,9 @@ export function createHud(cb: HudCallbacks): Hud {
     const soldiers = unitCount(state.units, "soldier");
     const captains = unitCount(state.units, "captain");
     const workerCap = workerHousingCap(state.buildings);
+    // Barracks house soldiers and captains in one shared pool (req §7.4).
     const barracksCap = barracksHousingCap(state.buildings);
-    popEl.textContent = `Pop W:${workers}/${workerCap} · S:${soldiers} · C:${captains}/${barracksCap}`;
+    popEl.textContent = `Pop W:${workers}/${workerCap} · S+C:${soldiers + captains}/${barracksCap} (S:${soldiers} C:${captains})`;
     equipEl.textContent = `Sword:${state.equipment.sword} · Shield:${state.equipment.shield}`;
 
     updateTooltip(state, view);

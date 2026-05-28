@@ -20,7 +20,7 @@ import { fieldAt } from "../game/fields.js";
 import { hexToPixel } from "../game/hex.js";
 import { HAMLET_CENTER, inBounds, tileAt } from "../game/map.js";
 import type { GameState } from "../game/state.js";
-import type { UnitKind } from "../game/units.js";
+import type { FieldAction, UnitKind } from "../game/units.js";
 import {
   centerOnTile,
   clampCamera,
@@ -83,7 +83,9 @@ export function createControls(opts: {
   let selection: number[] = [];
   let selectedBuilding: number | null = null;
   let placementKind: BuildableKind | null = null;
-  let pendingPlough = false;
+  // Pending field action (plough/plant/harvest). Works like building placement:
+  // pick the action, then left-click the target cell. null = not in field mode.
+  let pendingField: FieldAction | null = null;
   let hoveredUnitId: number | null = null;
 
   const held = new Set<string>();
@@ -116,6 +118,20 @@ export function createControls(opts: {
     return btn;
   }
 
+  // Is `action` legal on the tile at (tx, ty)? Plough needs bare grass/stump
+  // (no field, no building); plant needs a ploughed field; harvest needs a
+  // grown one. Used both to gate the click and to colour the ghost preview.
+  function fieldActionValid(s: GameState, action: FieldAction, tx: number, ty: number): boolean {
+    if (!inBounds(s.map, tx, ty)) return false;
+    const f = fieldAt(s.fields, tx, ty);
+    if (action === "plough") {
+      const t = tileAt(s.map, tx, ty);
+      return (t === "grass" || t === "stump") && !f && !buildingAt(s.buildings, tx, ty);
+    }
+    if (action === "plant") return !!f && f.stage === "ploughed";
+    return !!f && f.stage === "grown"; // harvest
+  }
+
   function rebuildActionPanel(): void {
     actionPanel.innerHTML = "";
 
@@ -139,9 +155,17 @@ export function createControls(opts: {
     // Unit actions — visible when at least one unit is selected.
     if (selection.length > 0) {
       const unitSection = apSection("Unit");
+      const fieldButton = (action: FieldAction, label: string): HTMLButtonElement =>
+        apButton(
+          label,
+          () => { pendingField = pendingField === action ? null : action; rebuildActionPanel(); },
+          pendingField === action,
+        );
       unitSection.append(
         apButton("Cancel", () => { enqueue({ type: "cancel", unitIds: [...selection] }); }),
-        apButton("Plough", () => { pendingPlough = !pendingPlough; rebuildActionPanel(); }, pendingPlough),
+        fieldButton("plough", "Plough"),
+        fieldButton("plant", "Plant"),
+        fieldButton("harvest", "Harvest"),
       );
       actionPanel.append(unitSection);
     }
@@ -273,14 +297,15 @@ export function createControls(opts: {
   }
 
   function leftClickResolved(tx: number, ty: number, screenX: number, screenY: number): void {
-    // Pending plough mode: left-click on grass sends the plough command.
-    if (pendingPlough && selection.length > 0) {
+    // Pending field action (plough/plant/harvest): left-click the target cell
+    // issues the command, mirroring building placement. One-shot — re-pick the
+    // action to do another tile.
+    if (pendingField && selection.length > 0) {
       const s = getState();
-      const t = tileAt(s.map, tx, ty);
-      if ((t === "grass" || t === "stump") && !fieldAt(s.fields, tx, ty) && !buildingAt(s.buildings, tx, ty)) {
-        enqueue({ type: "field", unitIds: [...selection], action: "plough", tx, ty });
+      if (fieldActionValid(s, pendingField, tx, ty)) {
+        enqueue({ type: "field", unitIds: [...selection], action: pendingField, tx, ty });
       }
-      pendingPlough = false;
+      pendingField = null;
       rebuildActionPanel();
       return;
     }
@@ -350,9 +375,11 @@ export function createControls(opts: {
     } else if (e.button === 2) {
       e.preventDefault();
       const tile = screenToHex(camera, p.x, p.y);
-      // Right-click in placement mode cancels placement.
-      if (placementKind) {
+      // Right-click cancels an active placement / field-action mode.
+      if (placementKind || pendingField) {
         placementKind = null;
+        pendingField = null;
+        rebuildActionPanel();
         return;
       }
       const cmd = rightClickCommand(tile.x, tile.y);
@@ -390,7 +417,7 @@ export function createControls(opts: {
     }
     if (e.code === "Escape") {
       placementKind = null;
-      pendingPlough = false;
+      pendingField = null;
       selection = [];
       selectedBuilding = null;
       rebuildActionPanel();
@@ -402,19 +429,11 @@ export function createControls(opts: {
       rebuildActionPanel();
       return;
     }
-    // F: toggle pending-plough mode (or immediately plough if hovering a valid tile).
+    // F: enter plough mode (then left-click the target tile). Mirrors the
+    // building-placement flow: choose the action first, then the cell.
     if (e.code === "KeyF") {
       if (selection.length > 0) {
-        if (mouse.inside) {
-          const tile = hoveredTile();
-          const s = getState();
-          const t = tileAt(s.map, tile.x, tile.y);
-          if ((t === "grass" || t === "stump") && !fieldAt(s.fields, tile.x, tile.y) && !buildingAt(s.buildings, tile.x, tile.y)) {
-            enqueue({ type: "field", unitIds: [...selection], action: "plough", tx: tile.x, ty: tile.y });
-            return;
-          }
-        }
-        pendingPlough = !pendingPlough;
+        pendingField = pendingField === "plough" ? null : "plough";
         rebuildActionPanel();
       }
       return;
@@ -513,11 +532,18 @@ export function createControls(opts: {
   }
 
   function placementGhost(): PlacementGhost | null {
-    if (!placementKind || !mouse.inside) return null;
+    if (!mouse.inside) return null;
     const tile = hoveredTile();
     const s = getState();
-    const valid = placementValid(s.map, s.buildings, s.fields, placementKind, tile.x, tile.y);
-    return { tx: tile.x, ty: tile.y, valid };
+    if (placementKind) {
+      const valid = placementValid(s.map, s.buildings, s.fields, placementKind, tile.x, tile.y);
+      return { tx: tile.x, ty: tile.y, valid };
+    }
+    if (pendingField && selection.length > 0) {
+      const valid = fieldActionValid(s, pendingField, tile.x, tile.y);
+      return { tx: tile.x, ty: tile.y, valid };
+    }
+    return null;
   }
 
   function getView(): View {

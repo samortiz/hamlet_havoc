@@ -6,6 +6,7 @@
 // update.ts builds the next one from the mutated context.
 
 import {
+  BARRACKS_HOUSING_CAPACITY,
   BASE_MOVE_TILES_PER_SEC,
   BUILD_TICKS,
   BUILDING_COST,
@@ -17,6 +18,7 @@ import {
   HARVEST_TICKS,
   HAY_FIELD_BUILD_TICKS,
   HAY_FIELD_COST,
+  HOUSE_HOUSING_CAPACITY,
   MINE_TYPE_WEIGHTS,
   ORE_TICKS_PER_UNIT,
   PLANT_TICKS,
@@ -799,7 +801,7 @@ export function workerHousingCap(buildings: Record<number, Building>): number {
   let cap = 0;
   for (const b of Object.values(buildings)) {
     if (!isBuilt(b)) continue;
-    if (b.kind === "house") cap += 2; // HOUSE_HOUSING_CAPACITY
+    if (b.kind === "house") cap += HOUSE_HOUSING_CAPACITY;
   }
   return cap;
 }
@@ -808,7 +810,7 @@ export function barracksHousingCap(buildings: Record<number, Building>): number 
   let cap = 0;
   for (const b of Object.values(buildings)) {
     if (!isBuilt(b)) continue;
-    if (b.kind === "barracks") cap += 4; // BARRACKS_HOUSING_CAPACITY
+    if (b.kind === "barracks") cap += BARRACKS_HOUSING_CAPACITY;
   }
   return cap;
 }

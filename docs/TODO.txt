@@ -1,0 +1,14 @@
+TODO 
+
+Add progress bars when constructing a building, ploughing, planting or gathering resources. 
+
+----
+
+When a building is interrupted we need to allow the user to destroy the incomplete building, or resume building by clicking on the incomplete building. 
+
+We need to disable the build buttons when resources are not available, also add a tooltip to let the user know which resources are required and what is missing. 
+
+Workers who finish a tile of trees, should return to a nearby tile to continue chopping wood.  They will stop if there is no free wood tile within 2 spaces of the last one chopped. 
+
+
+

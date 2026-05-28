@@ -2,7 +2,19 @@
 // the canvas; never mutates state. Tiles are pointy-top hexes (req §4.1);
 // the geometry lives in src/game/hex.ts.
 
-import { BUILD_TICKS, COLORS, HEX_SIZE, MAP_HEIGHT, MAP_WIDTH } from "../config/index.js";
+import {
+  BUILD_TICKS,
+  COLORS,
+  FISH_TICKS_PER_UNIT,
+  HARVEST_TICKS,
+  HEX_SIZE,
+  MAP_HEIGHT,
+  MAP_WIDTH,
+  ORE_TICKS_PER_UNIT,
+  PLANT_TICKS,
+  PLOUGH_TICKS,
+  WOOD_TICKS_PER_UNIT,
+} from "../config/index.js";
 import { isBuilt, type Building, type BuildingKind } from "../game/buildings.js";
 import type { FieldStage } from "../game/fields.js";
 import {
@@ -16,8 +28,9 @@ import {
 import { tileAt, type TileType } from "../game/map.js";
 import { carriedTotal } from "../game/resources.js";
 import type { GameState } from "../game/state.js";
+import type { FieldAction, GatherResource, Order } from "../game/units.js";
 import type { View } from "../ui/camera.js";
-import { buildingSprite, terrainSprite } from "./sprites.js";
+import { buildingSprite, terrainSprite, unitSprite } from "./sprites.js";
 
 const TERRAIN_COLOR: Record<TileType, string> = {
   grass: COLORS.terrainGrass,
@@ -26,6 +39,34 @@ const TERRAIN_COLOR: Record<TileType, string> = {
   mountain: COLORS.terrainMountain,
   stump: COLORS.terrainStump,
 };
+
+// Ticks one completion of each timed action takes — used to turn a unit's
+// accumulated `workTicks` into a 0..1 progress fraction for the on-unit bar
+// (req §10.2). Must mirror the durations the sim uses in actions.ts.
+const FIELD_TICKS: Record<FieldAction, number> = {
+  plough: PLOUGH_TICKS,
+  plant: PLANT_TICKS,
+  harvest: HARVEST_TICKS,
+};
+const GATHER_TICKS: Record<GatherResource, number> = {
+  wood: WOOD_TICKS_PER_UNIT,
+  fish: FISH_TICKS_PER_UNIT,
+  ore: ORE_TICKS_PER_UNIT,
+};
+
+// Progress (0..1) of the unit's current action while it is actively working,
+// or null when there's nothing to show (travelling, idle, building, operating —
+// construction shows its own bar on the building). Field actions fill toward
+// completion; gathering fills toward the next resource unit.
+function unitWorkProgress(order: Order): number | null {
+  if (order.type === "field" && order.phase === "working") {
+    return Math.min(1, order.workTicks / FIELD_TICKS[order.action]);
+  }
+  if (order.type === "gather" && order.phase === "working") {
+    return Math.min(1, order.workTicks / GATHER_TICKS[order.resource]);
+  }
+  return null;
+}
 
 const FIELD_COLOR: Record<FieldStage, string> = {
   ploughed: COLORS.fieldPloughed,
@@ -111,6 +152,17 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
     c.strokeStyle = color;
     c.lineWidth = lineWidth;
     c.stroke();
+  }
+
+  // Small action progress bar centred at (px) with its top at `topY`.
+  function drawProgressBar(px: number, topY: number, frac: number): void {
+    const w = HEX_SIZE * 0.8;
+    const h = 4;
+    const x = px - w / 2;
+    c.fillStyle = "rgba(0,0,0,0.55)";
+    c.fillRect(x - 1, topY - 1, w + 2, h + 2);
+    c.fillStyle = COLORS.gold;
+    c.fillRect(x, topY, w * frac, h);
   }
 
   function drawSpriteAt(img: HTMLImageElement, px: number, py: number): void {
@@ -260,31 +312,52 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
       strokeHex(px, py, HEX_SIZE * 0.78, ghostColor, 2);
     }
 
-    // Units.
+    // Units. A character sprite is drawn aspect-preserved with its feet near
+    // the tile centre; kinds without a sprite (and sprites still decoding) fall
+    // back to the procedural colour circle.
     const selected = new Set(view.selection);
     const unitRadius = HEX_SIZE * 0.5;
+    const SPRITE_TARGET_H = HEX_SIZE * 1.05; // ~42px tall — fits inside the ~80px hex
+    const FOOT_OFFSET = HEX_SIZE * 0.25; // how far below tile centre the feet sit
     for (const u of Object.values(state.units)) {
       if (u.insideBuildingId !== null) continue; // hidden while operating
       const { px, py } = hexToPixel(u.x, u.y);
-      c.beginPath();
-      c.arc(px, py, unitRadius, 0, Math.PI * 2);
-      c.fillStyle =
-        u.kind === "soldier" ? "#b89678"
-        : u.kind === "captain" ? "#d4af37"
-        : COLORS.worker;
-      c.fill();
-      c.lineWidth = 2;
-      c.strokeStyle = COLORS.unitOutline;
-      c.stroke();
+      const sprite = unitSprite(u.kind);
+
+      // headY = top of whatever glyph we draw, for placing the carry cue.
+      let headY: number;
+      if (sprite) {
+        const h = SPRITE_TARGET_H;
+        const w = (sprite.naturalWidth / sprite.naturalHeight) * h;
+        const top = py + FOOT_OFFSET - h;
+        c.drawImage(sprite, px - w / 2, top, w, h);
+        headY = top;
+      } else {
+        c.beginPath();
+        c.arc(px, py, unitRadius, 0, Math.PI * 2);
+        c.fillStyle = u.kind === "captain" ? "#d4af37" : COLORS.worker;
+        c.fill();
+        c.lineWidth = 2;
+        c.strokeStyle = COLORS.unitOutline;
+        c.stroke();
+        headY = py - unitRadius;
+      }
+
       if (carriedTotal(u.carrying) > 0) {
         c.beginPath();
-        c.arc(px, py - unitRadius, unitRadius * 0.35, 0, Math.PI * 2);
+        c.arc(px, headY, unitRadius * 0.35, 0, Math.PI * 2);
         c.fillStyle = COLORS.carryCue;
         c.fill();
       }
+      // Action progress bar above the head (ploughing/planting/harvesting,
+      // gathering wood/fish/ore). Construction shows its own bar on the building.
+      const progress = unitWorkProgress(u.order);
+      if (progress !== null) {
+        drawProgressBar(px, headY - 10, progress);
+      }
       if (selected.has(u.id)) {
         c.beginPath();
-        c.arc(px, py, unitRadius + 4, 0, Math.PI * 2);
+        c.ellipse(px, py + FOOT_OFFSET * 0.5, unitRadius + 4, unitRadius * 0.55, 0, 0, Math.PI * 2);
         c.strokeStyle = COLORS.selectionRing;
         c.lineWidth = 2;
         c.stroke();
