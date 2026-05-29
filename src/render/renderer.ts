@@ -5,6 +5,7 @@
 import {
   BUILD_TICKS,
   COLORS,
+  CROP_GROW_TICKS,
   FISH_TICKS_PER_UNIT,
   HARVEST_TICKS,
   HEX_SIZE,
@@ -14,6 +15,7 @@ import {
   PLANT_TICKS,
   PLOUGH_TICKS,
   WOOD_TICKS_PER_UNIT,
+  WORKER_SPAWN_TICKS,
 } from "../config/index.js";
 import { isBuilt, type Building, type BuildingKind } from "../game/buildings.js";
 import type { FieldStage } from "../game/fields.js";
@@ -25,12 +27,33 @@ import {
   HEX_VERT_SPACING,
   HEX_WIDTH,
 } from "../game/hex.js";
-import { tileAt, type TileType } from "../game/map.js";
-import { carriedTotal } from "../game/resources.js";
+import { mountainTypeAt, tileAt, type MineType, type TileType } from "../game/map.js";
+import { carriedTotal, RESOURCE_TYPES, type ResourceType } from "../game/resources.js";
 import type { GameState } from "../game/state.js";
-import type { FieldAction, GatherResource, Order } from "../game/units.js";
+import { hasHorse, type FieldAction, type GatherResource, type Order } from "../game/units.js";
 import type { View } from "../ui/camera.js";
 import { buildingSprite, terrainSprite, unitSprite } from "./sprites.js";
+
+const RESOURCE_COLOR: Record<ResourceType, string> = {
+  hay: COLORS.resourceHay,
+  wheat: COLORS.resourceWheat,
+  wood: COLORS.resourceWood,
+  stone: COLORS.resourceStone,
+  meat: COLORS.resourceMeat,
+  iron: COLORS.resourceIron,
+  gold: COLORS.resourceGold,
+  diamond: COLORS.resourceDiamond,
+};
+
+function dominantCarryColor(carrying: Partial<Record<ResourceType, number>>): string {
+  let best: ResourceType | null = null;
+  let bestAmt = 0;
+  for (const r of RESOURCE_TYPES) {
+    const amt = carrying[r] ?? 0;
+    if (amt > bestAmt) { bestAmt = amt; best = r; }
+  }
+  return best ? RESOURCE_COLOR[best] : COLORS.carryCue;
+}
 
 const TERRAIN_COLOR: Record<TileType, string> = {
   grass: COLORS.terrainGrass,
@@ -38,6 +61,14 @@ const TERRAIN_COLOR: Record<TileType, string> = {
   water: COLORS.terrainWater,
   mountain: COLORS.terrainMountain,
   stump: COLORS.terrainStump,
+};
+
+// Marker colour for a mountain's rock type and a mine's rolled type (T2). The
+// MineType and MountainType unions share these three members.
+const ORE_TYPE_COLOR: Record<MineType, string> = {
+  stone: COLORS.resourceStone,
+  iron: COLORS.resourceIron,
+  gold: COLORS.resourceGold,
 };
 
 // Ticks one completion of each timed action takes — used to turn a unit's
@@ -75,6 +106,33 @@ const FIELD_COLOR: Record<FieldStage, string> = {
   hayBuilding: COLORS.hayBuilding,
   hayMature: COLORS.hayMature,
 };
+
+// Parse "#rrggbb" → [r,g,b]; linear-interpolate two such colours by t∈[0,1].
+function hexRgb(hex: string): [number, number, number] {
+  const n = parseInt(hex.slice(1), 16);
+  return [(n >> 16) & 0xff, (n >> 8) & 0xff, n & 0xff];
+}
+function lerpColor(a: string, b: string, t: number): string {
+  const [ar, ag, ab] = hexRgb(a);
+  const [br, bg, bb] = hexRgb(b);
+  const k = Math.max(0, Math.min(1, t));
+  const r = Math.round(ar + (br - ar) * k);
+  const g = Math.round(ag + (bg - ag) * k);
+  const bl = Math.round(ab + (bb - ab) * k);
+  return `rgb(${r}, ${g}, ${bl})`;
+}
+
+// Display colour for a field tile (T8). A planted wheat field greens up as it
+// matures — lerping from the pale "planted" green toward the deep "grown" green
+// over CROP_GROW_TICKS — so the player can read growth at a glance; a ripe field
+// shows the full "grown" green. Everything else uses its flat stage colour.
+function fieldColor(stage: FieldStage, plantedTick: number, tickCount: number): string {
+  if (stage === "planted") {
+    const t = (tickCount - plantedTick) / CROP_GROW_TICKS;
+    return lerpColor(COLORS.fieldPlanted, COLORS.fieldGrown, t);
+  }
+  return FIELD_COLOR[stage];
+}
 
 const BUILDING_COLOR: Record<BuildingKind, string> = {
   mainHall: COLORS.buildingMainHall,
@@ -165,6 +223,18 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
     c.fillRect(x, topY, w * frac, h);
   }
 
+  // A small filled, dark-rimmed dot used to tag a tile with an ore/rock type
+  // (mountain rock type and built-mine yield type, T2).
+  function drawTypeBadge(cx: number, cy: number, r: number, color: string): void {
+    c.beginPath();
+    c.arc(cx, cy, r, 0, Math.PI * 2);
+    c.fillStyle = color;
+    c.fill();
+    c.lineWidth = 1.5;
+    c.strokeStyle = "rgba(0,0,0,0.6)";
+    c.stroke();
+  }
+
   function drawSpriteAt(img: HTMLImageElement, px: number, py: number): void {
     c.drawImage(
       img,
@@ -234,6 +304,11 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
       c.arc(px + innerSize * 0.6, py - innerSize * 0.6, 3, 0, Math.PI * 2);
       c.fill();
     }
+
+    // Main Hall raising a worker (T5): progress bar below the building.
+    if (b.kind === "mainHall" && b.spawning) {
+      drawProgressBar(px, py + innerSize * 0.7, b.spawnProgress / WORKER_SPAWN_TICKS);
+    }
   }
 
   function render(state: GameState, view: View): void {
@@ -278,9 +353,21 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
         const { px, py } = hexToPixel(tx, ty);
         const sprite = terrainSprite(t);
         if (sprite) {
-          drawSpriteAt(sprite, px, py);
+          c.drawImage(
+            sprite,
+            px - SPRITE_DRAW_W / 2,
+            py - SPRITE_DRAW_H / 2,
+            SPRITE_DRAW_W,
+            SPRITE_DRAW_H,
+          );
         } else {
           fillHex(px, py, HEX_SIZE, TERRAIN_COLOR[t]);
+        }
+        // Mountain rock-type badge (T2): a small outlined dot near the peak so
+        // the player can read a mountain's type before committing a Mine to it.
+        if (t === "mountain") {
+          const mt = mountainTypeAt(state.map, ty * MAP_WIDTH + tx);
+          drawTypeBadge(px, py - HEX_SIZE * 0.32, HEX_SIZE * 0.16, ORE_TYPE_COLOR[mt]);
         }
       }
     }
@@ -288,17 +375,56 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
     // Fields (tile features painted as a slightly inset hex over their tile).
     for (const f of Object.values(state.fields)) {
       const { px, py } = hexToPixel(f.x, f.y);
-      fillHex(px, py, HEX_SIZE * 0.85, FIELD_COLOR[f.stage]);
+      fillHex(px, py, HEX_SIZE * 0.85, fieldColor(f.stage, f.plantedTick, state.tickCount));
     }
 
     // Buildings.
     const selectedBuildings = new Set(view.selectedBuildings ?? []);
     for (const b of Object.values(state.buildings)) {
       drawBuilding(b);
+      // Built Mine: tag it with the type it yields once that's been rolled (T2).
+      if (b.kind === "mine" && isBuilt(b)) {
+        const mineType = state.map.mineType[b.y * MAP_WIDTH + b.x];
+        if (mineType) {
+          const { px, py } = hexToPixel(b.x, b.y);
+          drawTypeBadge(px, py - HEX_SIZE * 0.34, HEX_SIZE * 0.18, ORE_TYPE_COLOR[mineType]);
+        }
+      }
       if (selectedBuildings.has(b.id)) {
         const { px, py } = hexToPixel(b.x, b.y);
         strokeHex(px, py, HEX_SIZE * 0.8, COLORS.selectionRing, 2);
       }
+    }
+
+    // Town marketplace (req §18): a fixed gold marker far from the Main Hall.
+    {
+      const { px, py } = hexToPixel(state.town.x, state.town.y);
+      const size = HEX_SIZE * 0.7;
+      fillHex(px, py, size, COLORS.goldDim);
+      strokeHex(px, py, size, COLORS.gold, 2);
+      c.fillStyle = COLORS.buildingLabel;
+      c.font = `bold ${Math.round(HEX_SIZE * 0.4)}px system-ui, sans-serif`;
+      c.textAlign = "center";
+      c.textBaseline = "middle";
+      c.fillText("Town", px, py);
+    }
+
+    // Enemies (req §6.1, §17): red discs with an HP pip. Stationary in M5.
+    for (const e of Object.values(state.enemies)) {
+      const { px, py } = hexToPixel(e.x, e.y);
+      const r = HEX_SIZE * 0.42;
+      c.beginPath();
+      c.arc(px, py, r, 0, Math.PI * 2);
+      c.fillStyle = "#9a2f24";
+      c.fill();
+      c.lineWidth = 2;
+      c.strokeStyle = "#2a0d0a";
+      c.stroke();
+      c.fillStyle = COLORS.parchment;
+      c.font = `bold ${Math.round(HEX_SIZE * 0.4)}px system-ui, sans-serif`;
+      c.textAlign = "center";
+      c.textBaseline = "middle";
+      c.fillText(String(e.hp), px, py);
     }
 
     // Placement ghost preview (req §7.1, while in placement mode).
@@ -324,6 +450,14 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
       const { px, py } = hexToPixel(u.x, u.y);
       const sprite = unitSprite(u.kind);
 
+      // Horse (req §9): a brown mount ellipse under the unit's feet.
+      if (hasHorse(u)) {
+        c.beginPath();
+        c.ellipse(px, py + FOOT_OFFSET, unitRadius * 1.15, unitRadius * 0.5, 0, 0, Math.PI * 2);
+        c.fillStyle = COLORS.brownDark;
+        c.fill();
+      }
+
       // headY = top of whatever glyph we draw, for placing the carry cue.
       let headY: number;
       if (sprite) {
@@ -345,9 +479,28 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
 
       if (carriedTotal(u.carrying) > 0) {
         c.beginPath();
-        c.arc(px, headY, unitRadius * 0.35, 0, Math.PI * 2);
-        c.fillStyle = COLORS.carryCue;
+        c.arc(px + unitRadius * 0.7, headY, unitRadius * 0.35, 0, Math.PI * 2);
+        c.fillStyle = dominantCarryColor(u.carrying);
         c.fill();
+      }
+      // Equipment cues (req §6.4): a gold blade to the right for a sword, a grey
+      // disc to the left for a shield.
+      if (u.equipped.sword) {
+        c.strokeStyle = COLORS.gold;
+        c.lineWidth = 2;
+        c.beginPath();
+        c.moveTo(px + unitRadius * 0.8, py + FOOT_OFFSET * 0.4);
+        c.lineTo(px + unitRadius * 0.8, py - unitRadius * 0.6);
+        c.stroke();
+      }
+      if (u.equipped.shield) {
+        c.beginPath();
+        c.arc(px - unitRadius * 0.85, py - unitRadius * 0.1, unitRadius * 0.3, 0, Math.PI * 2);
+        c.fillStyle = "#9aa3ad";
+        c.fill();
+        c.lineWidth = 1;
+        c.strokeStyle = COLORS.unitOutline;
+        c.stroke();
       }
       // Action progress bar above the head (ploughing/planting/harvesting,
       // gathering wood/fish/ore). Construction shows its own bar on the building.

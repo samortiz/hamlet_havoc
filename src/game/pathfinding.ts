@@ -5,6 +5,7 @@
 // map's current walkability, which lets later milestones re-path when terrain
 // or buildings change.
 
+import type { Building } from "./buildings.js";
 import { hexDistance, hexNeighbors } from "./hex.js";
 import { isWalkable, type GameMap, type TileCoord } from "./map.js";
 
@@ -63,9 +64,12 @@ export function findPath(
   map: GameMap,
   start: TileCoord,
   goal: TileCoord,
+  buildings?: Record<number, Building>,
 ): TileCoord[] | null {
-  if (!isWalkable(map, start.x, start.y) || !isWalkable(map, goal.x, goal.y))
-    return null;
+  // The goal must be reachable, but the start need not be walkable — a unit can
+  // always step off the tile it stands on (e.g. a mountain whose Mine was just
+  // demolished), so we only gate on the goal here and on neighbours below.
+  if (!isWalkable(map, goal.x, goal.y, buildings)) return null;
   if (start.x === goal.x && start.y === goal.y) return [];
 
   const W = map.width;
@@ -91,7 +95,7 @@ export function findPath(
     const cg = g.get(cur.idx) as number;
 
     for (const n of hexNeighbors(cx, cy)) {
-      if (!isWalkable(map, n.x, n.y)) continue;
+      if (!isWalkable(map, n.x, n.y, buildings)) continue;
       const nIdx = n.y * W + n.x;
       if (closed.has(nIdx)) continue;
       const ng = cg + 1; // uniform cost on a hex grid

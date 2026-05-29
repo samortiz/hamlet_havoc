@@ -108,8 +108,9 @@ Two layers, matching the sim/render split:
 | Grass    | Yes      | Build farm, place buildings         | Yes          |
 | Forest   | Yes      | Collect wood                        | After clearing |
 | Water    | No       | Fish (from adjacent tile)           | No           |
-| Mountain | Yes      | Build a mine                        | Mine only    |
+| Mountain | When mined | Build a mine (from an adjacent tile) | Mine only  |
 
+- Mountains are **impassable** until a mine is built on them. The mine is built by a worker standing on an adjacent tile; once the mine completes, the mountain becomes walkable so units can stand on it to mine. A mountain blob's interior tiles (no walkable neighbour) therefore cannot host a mine.
 - Forest tiles can be **cleared to grass**: after the wood is harvested the tile becomes a stump and then bare grass, which is buildable.
 - Cleared/stumped forest regrows at the start of spring (see §12).
 
@@ -303,7 +304,7 @@ A new game initializes with:
 ## 13. Mining
 
 ### 13.1 Setup
-- Worker builds a mine on a mountain tile (4 wood, 30 sec).
+- Worker builds a mine on a mountain tile (4 wood, 30 sec). The mountain is impassable while bare, so the worker builds it from an adjacent tile; the mountain becomes walkable once the mine is complete (see §4.2). Mountains whose every neighbour is also impassable cannot host a mine.
 - On completion, the mine is randomly assigned a type:
   - Stone (most common — e.g., 50%)
   - Iron (less common — e.g., 40%)
@@ -403,9 +404,18 @@ A library of 6–10 misc events provides variety. Each is defined by the data ta
 
 ## 18. Town (External Marketplace)
 
-- A fixed **location on the map** near an edge, far from the Main Hall. There is no town menu/screen — units must physically travel there carrying goods.
+- A fixed **location on the map** far from the Main Hall. There is no town menu/screen — units must physically travel there carrying goods.
 - Units can buy or sell **all basic resources** at their listed values, and purchase **horses** (cost = 20 in resource value, e.g., 4 meat or 10 wheat).
 - A trade requires a unit to carry goods to town and carry purchases back.
+- Town Interface. When a worker gets to town, show a dialog / window to facilitate trading. 
+- It will need three areas, one with items for purchase in town, one with items currently stored in town and one with items carried by the unit that went to town. 
+-  The user can move items freely between town storage and the worker inventory. 
+-  If there are multiple units in town, only one needs to show up in the UI.
+-  The user can select items from town that he wants to buy, and they will be collected in a list / area like a shopping cart. 
+-  Then the user can choose items to trade from the town storage or the worker's inventory.  If the items offered for trade have equivalent or greater value than the item
+requested then the trade can proceed, otherwise the town shopkeeper will reject the trade. 
+-  When items are stored in town they are not counted towards the hamlet resource cap. 
+-  The user can move a unit to town, unload inventory and return to the hamlet, without any trades.
 
 ---
 
@@ -573,8 +583,8 @@ Each milestone lists its **goal**, **key deliverables**, and an **acceptance che
 - Acceptance: A full year cycles correctly; upkeep is charged and demotes/kills units per §6.3; season-locked actions are gated.
 
 **M5 — Combat, Town & Horses**
-- Goal: Military units, the marketplace, and mounts.
-- Deliverables: Soldier/captain units; equipment (sword/shield) affecting stats and carry; combat resolution (1/sec, roll − defense, min 0); horses (+3 HP, ×2 speed, +5 carry, upkeep); town location with buy/sell + horse purchase.
+- Goal: Military units, the town marketplace and mounts.
+- Deliverables: Soldier/captain units; equipment (sword/shield) affecting stats and carry; combat resolution (1/sec, roll − defense, min 0); horses (+3 HP, ×2 speed, +5 carry, upkeep); town location with exchanging resources + horse purchase.
 - Acceptance: Units fight per the damage formula; a unit can travel to town to trade and buy a horse, then carries more and moves faster.
 
 **M6 — Enemies & End-of-Year Events**
@@ -586,3 +596,5 @@ Each milestone lists its **goal**, **key deliverables**, and an **acceptance che
 - Goal: Ship-ready feel.
 - Deliverables: Intro and game-over screens (with run stats); tune the outstanding balancing values (§26); tooltips; readability/colorblind pass.
 - Acceptance: A new player can start from the intro, play multiple years, lose, and see end-of-run stats — with values that feel balanced.
+
+

@@ -54,18 +54,19 @@ src/
   main.ts            — bootstrap; fixed-timestep loop (30 ticks/sec), persistence wiring, dev-only window.__game hook
   config/index.ts    — all tunable constants (durations→ticks, map size, HEX_SIZE, costs, palette); single source of truth
   game/              — simulation core (no render/ or ui/ imports)
-    state.ts         — GameState, createInitialState, season derivation, SAVE_VERSION
-    map.ts           — 40×40 pointy-top hex map + procedural gen + per-hex forest/mine state
+    state.ts         — GameState (units/buildings/fields/enemies/resources/equipment/town), createInitialState, season derivation, SAVE_VERSION
+    map.ts           — 40×40 pointy-top hex map + procedural gen + per-hex forest/mine state + town placement
     hex.ts           — hex geometry: 6-neighbour adjacency, distance, pixel↔hex math (single source of grid shape)
     rng.ts           — seeded PRNG (mulberry32)
     pathfinding.ts   — hand-written hex-grid A* (6-direction, uniform cost, hex-distance heuristic)
-    units.ts         — unit kinds + order/task model (Order union)
+    units.ts         — unit kinds + order/task model (Order union); equipment/horse/carry-cap helpers
     resources.ts     — resource types, trade values, pool/inventory helpers
     buildings.ts     — building kinds, storage, repair cost, nearest-storage lookup
+    combat.ts        — enemy entities (goblin/serpent/kraken) + the §17.1 resolver (adjacency, roll−defense, horse absorption)
     fields.ts        — farm + hay field tile features (ploughed/planted/grown, hayBuilding/hayMature)
-    actions.ts       — order state machines (move/gather/field/build/operate) + placement/cost/housing helpers
+    actions.ts       — order state machines (move/gather/field/build/operate/attack/trade) + placement/cost/housing/trade helpers
     commands.ts      — Command union (the only input→sim channel)
-    update.ts        — stateless step: commands→orders, advance units, advance buildings, grow crops
+    update.ts        — stateless step: commands→orders, advance units, advance buildings, resolve combat, grow crops
     persistence.ts   — JSON serialize/deserialize for save/load
   render/
     renderer.ts      — canvas drawing; reads state, never mutates it
@@ -122,6 +123,13 @@ Run both with `npm run test:all`.
 - Bump `SAVE_VERSION` when the serialized state shape changes.
 - **Mining is a `gather` order** (resource `"ore"`), not an `operate` mode — the
   unit stands on a built Mine's mountain tile. `operate` is smithy/barracks only.
+- **Mountains are impassable until mined** (req §4.2, §13). `isWalkable` /
+  `findPath` take an optional `buildings` arg: a mountain is walkable only when a
+  *built* mine sits on it (no arg ⇒ every mountain blocked, used at map-gen). A
+  mine is therefore built from an adjacent hex (`startBuild` falls back to
+  `pathAdjacentTo` when the target tile isn't walkable), and the mountain opens up
+  on completion. `findPath` permits an impassable *start* tile so a unit on a
+  just-demolished mine isn't trapped.
 
 ## Implementation Status (Milestones)
 
@@ -132,21 +140,105 @@ See req §27 for full milestone definitions and acceptance checks.
   storage, HUD, LocalStorage persistence.
 - **M3** ✅ — Building system: placement, construction, all building types, smithy
   crafting (→ global equipment pool), barracks training (housing-gated), repair,
-  demolish. Mining requires a built Mine; mine type rolled at completion.
-- **Hex board** ✅ — 40×40 pointy-top hex grid; `SAVE_VERSION = 4`.
+  demolish. Interrupted builds can be resumed (right-click the site with workers,
+  or select it + Resume) or demolished. Mining requires a built Mine; mine type
+  rolled at completion. Mountains are impassable until their mine is built (§4.2,
+  §13) — the mine is built from an adjacent hex and the mountain becomes walkable
+  on completion.
+- **Hex board** ✅ — 40×40 pointy-top hex grid; `SAVE_VERSION = 6`.
 - **UI polish** ✅ — Unit hover tooltip; clickable action panel (Build always,
   Unit/Building sections by selection). Field actions (Plough/Plant/Harvest) use
   a building-style "pick action → click target cell" mode with a ghost preview.
-- **M4** ⬜ — Season cycle, action durations, end-of-season upkeep/demotion,
-  season-locked actions, crop loss, forest regrowth. *(Currently the calendar is
-  derived from ticks and seasons advance, but upkeep, season-locks, and regrowth
-  are not yet enforced; crops mature on a fixed timer placeholder.)*
-- **M5** ⬜ — Soldiers/captains combat, equipment effects, horses, town economy.
-- **M6** ⬜ — Enemy AI, end-of-year events (attack/tax/misc), event announcement.
-- **M7** ⬜ — Intro + game-over screens, balancing pass, accessibility.
-
-> v1 ships placeholder/CC0 graphics; final art is not provided (req §3.2). Gather
-> rates, HEX_SIZE, and unit speed are tunable (`config/`) and get retuned in M7.
+- **M4** ✅ — Season cycle with HUD timer; end-of-season upkeep + demotion ladder
+  (worker→dies, soldier→worker, captain→soldier; §6.3); season-locked actions
+  (plant=spring, harvest=fall, summer/winter fishing-rate variance); crop loss for
+  wheat unharvested by winter; forest stumps regrow at spring. Season boundaries
+  are detected per-step from the tick count in `game/season.ts`; the ctx-mutating
+  settlement (`processSeasonTransitions`) runs at the end of each `update()` step.
+  Housing/population caps were already enforced at training time in M3.
+- **M5** ✅ — Combat, town & horses (`SAVE_VERSION = 6`). One §17.1 combat
+  resolver in `game/combat.ts` (`stepCombat`): hex-adjacent units/enemies trade
+  blows once per second (`attackCooldown`), damage = `roll(attack range) −
+  defence` clamped ≥0; a horse's buffer HP (`horseHp`) soaks damage first and
+  dies when spent. Units gained `equipped` (sword +1 atk / shield +1 def, each
+  eating a carry slot) and `horseHp` (×2 speed, +5 carry). New orders `attack`
+  (close in, then the combat pass swings — idle soldiers/captains auto-attack
+  adjacent enemies, workers defend in place) and `trade` (walk to the town tile,
+  exchange at listed values; surplus returned as gold + hay change). New commands
+  `attack`/`trade`/`equip` (equip is instant, pulling from the global equipment
+  pool). The `town` tile is placed at gen time far from the Main Hall; `enemies`
+  are id-keyed plain data — **stationary and injectable in M5; spawning, movement
+  AI, and loot are M6.** Horse upkeep (2 hay-or-wheat/season) folds into the
+  existing end-of-season pass. Combat resolves one swing per `update()` step, so
+  real play (1 tick/step) is correct but `tick(n)` does *not* fast-forward an
+  active fight — sim tests step combat tick-by-tick.
+- **Town interface** ✅ (req §18, `SAVE_VERSION = 6`) — Interactive marketplace.
+  `GameState.townStorage` is a resource pool kept *separate* from `resources`, so
+  goods stashed at town don't count against the hamlet cap. When an idle unit is
+  at (or next to) the town tile, `ui/town.ts` auto-opens a modal panel with four
+  areas (For Sale / Cart / Town Storage / Carrying). Two instant commands drive
+  it: `townStore` (free transfer between unit inventory and town storage, cap-
+  clamped when loading the unit) and `townTrade` (buy a cart + optional horse,
+  paying with goods offered from inventory and/or storage). The sim logic lives
+  in `game/actions.ts`: `isUnitAtTown`, `executeTownStore`, `evaluateTownTrade`
+  (pure — shared by the UI to enable/explain Confirm), and `executeTownTrade`.
+  The shopkeeper accepts only when offered value ≥ cart value; surplus is returned
+  to town storage as value-exact gold + hay change. The older automatic `trade`
+  order (the "Sell at Town" / "Buy Horse" action-panel shortcuts) is unchanged;
+  right-clicking the town tile now just walks the unit there so the panel opens.
+- **Mountain types** ✅ (T2, `SAVE_VERSION = 7`) — every mountain tile gets a rock
+  type (stone/iron/gold) rolled at map-gen (`map.mountainType`, `mountainTypeAt`;
+  weights in config `MOUNTAIN_TYPE_WEIGHTS`). That type biases the mine type rolled
+  when a Mine completes there (`MINE_TYPE_WEIGHTS_BY_MOUNTAIN`, replacing the old
+  flat `MINE_TYPE_WEIGHTS`): stone→80/15/5, iron→40/50/10, gold→40/20/40. The
+  renderer tags each mountain with a small rock-type dot near its peak and each
+  built Mine with its rolled yield type. Old saves (no `mountainType`) fall back
+  to "stone" via `mountainTypeAt`.
+- **Main Hall worker production** ✅ (T5, `SAVE_VERSION = 8`) — the Main Hall can
+  raise a fresh worker for free over `WORKER_SPAWN_TICKS` (20 s). `Building` gained
+  `spawning`/`spawnProgress`; the `spawnWorker` command flips them on (gated by
+  worker housing, §7.4). `advanceBuildings` ticks the Main Hall via `tickMainHall`,
+  spawning the worker on a free adjacent tile on completion and stalling at the cap
+  (smithy-style) if housing filled mid-production. The action panel shows a
+  Create Worker button when a built Main Hall is selected; the renderer draws a
+  progress bar under the hall while it works.
+- **Upkeep notifications** ✅ (T7, `SAVE_VERSION = 9`) — the sim surfaces a
+  player-facing event whenever upkeep is unpaid: a worker starving, a captain/
+  soldier demoted, or a horse lost. `GameState.notifications` is a rolling log
+  (`GameNotification {id, tick, kind, message}`, capped at `MAX_NOTIFICATIONS`);
+  `actions.ts` `notify()` appends to `ctx.notifications` from `chargeUpkeep`/
+  `demote`, and `update()` writes back the last N. The HUD (`hud.ts`
+  `drainNotifications`) toasts each id once into the `#hud-notifications` stack,
+  lazily initialising its high-water mark so a loaded save doesn't replay.
+- **Farming polish** ✅ (T8) — planting now takes 10 s (`PLANT_TICKS`); a
+  harvested wheat field yields a random `WHEAT_HARVEST_MIN..MAX` (10–20, seeded
+  RNG) instead of a flat 4. Wheat fields green up as they grow: the renderer
+  lerps a planted field's colour from the pale `fieldPlanted` toward the deep
+  `fieldGrown` over `CROP_GROW_TICKS`. A worker left **idle on a wheat field**
+  tends it hands-free — `autoFarmOrder` (in `advanceUnit`'s idle case) plants a
+  ploughed field in spring (when seed wheat is on hand) and harvests a ripe one
+  in fall.
+- **Hall load/unload** ✅ (T9) — a load/unload interface mirroring the town
+  marketplace, but transferring between a unit's inventory and the hamlet's
+  shared `resources` pool (so it respects the storage cap). `ui/hall.ts` opens a
+  modal (`#hall-panel`) when a *built storage building* (Main Hall, Barn, House)
+  is selected with a non-captain unit on or beside it (`isUnitAtBuilding`,
+  hex-distance ≤ 1) — prefers a unit in the current selection, else the lowest
+  id. One instant command, `hallStore` (handled in `game/actions.ts`
+  `executeHallStore`): `toStorage` true = unit → pool (clamped to free pool
+  space), false = pool → unit (clamped to carry room). Lets the player unload a
+  returning worker or load one up for a town run. Unlike the auto-opening town
+  panel it is selection-driven, with Load/Store/Unload All/Close buttons; it
+  reuses the `town-*` CSS. No new persisted state (`SAVE_VERSION` unchanged).
+- **Building tooltip** ✅ (T10) — hovering a building shows a tooltip mirroring
+  the unit one: name, `HP x/y`, and kind-specific stats (storage contribution,
+  house/barracks housing, in-progress craft/train/worker-spawn %, a mine's rolled
+  yield; under-construction shows build %). `controls.ts` tracks
+  `hoveredBuildingId` (a hovered unit wins ties); `ui/hud.ts` `describeBuilding` +
+  `updateBuildingTooltip` render `#building-tooltip` (shares the unit-tooltip CSS).
+- **M6** ⬜ — Enemy AI + spawning
+  **M7** ⬜ — End-of-year events (attack/tax/misc), event announcement.
+- **M8** ⬜ — Intro + game-over screens, balancing pass, accessibility.
 
 ## Input & Color Reference
 
@@ -157,4 +249,8 @@ mode (then click the target cell — Plant/Harvest are action-panel buttons); X/
 demolish/repair the selected building; K/L craft sword/shield; T trains; C cancels;
 Space pauses; Esc cancels placement/field-mode/selection. Placement and field
 modes are pick-then-click with a ghost preview; right-click also cancels them.
-Every shortcut has an action-panel button.
+Every shortcut has an action-panel button. M5 adds mouse/button-only actions (no
+new hotkeys): right-click an enemy → attack, right-click the town tile → walk
+there (the marketplace panel auto-opens on arrival); the Unit action-panel
+section carries Equip/Unequip Sword·Shield and the Sell at Town / Buy Horse quick
+auto-trade shortcuts.

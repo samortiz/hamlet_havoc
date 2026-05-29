@@ -10,10 +10,13 @@ import {
   HAMLET_CLEARING_RADIUS,
   MAP_HEIGHT,
   MAP_WIDTH,
+  MOUNTAIN_TYPE_WEIGHTS,
   TERRAIN_TARGET,
+  TOWN_TARGET_FRACTION,
 } from "../config/index.js";
+import { buildingAt, isBuilt, type Building } from "./buildings.js";
 import { hexDistance, hexNeighbors, hexStep } from "./hex.js";
-import { rngInt } from "./rng.js";
+import { rngInt, rngNext } from "./rng.js";
 
 // "stump" is a depleted forest tile: walkable, no more wood, and (from M4)
 // regrows to forest at spring (req §4.2, §12).
@@ -21,6 +24,11 @@ export type TileType = "grass" | "forest" | "water" | "mountain" | "stump";
 
 // Mine type assigned to a mountain tile the first time it is mined (req §13.1).
 export type MineType = "stone" | "iron" | "gold";
+
+// Visible rock type of a mountain tile, rolled at map-gen (T2). It biases the
+// mine type a player gets when they build a Mine there (see config
+// MINE_TYPE_WEIGHTS_BY_MOUNTAIN).
+export type MountainType = "stone" | "iron" | "gold";
 
 export interface TileCoord {
   x: number;
@@ -32,11 +40,14 @@ export interface GameMap {
   height: number;
   tiles: TileType[]; // row-major, length = width * height
   // Per-tile mutable gathering state, keyed by tile index. Sparse: a missing
-  // forest entry means "full" (FOREST_WOOD_MAX); a missing mountain entry means
-  // "type not yet rolled". Kept out of `tiles` so depletion/typing serialize
-  // without bloating the terrain array.
+  // forest entry means "full" (FOREST_WOOD_MAX); a missing mineType entry means
+  // "mine type not yet rolled". Kept out of `tiles` so depletion/typing
+  // serialize without bloating the terrain array.
   forestWood: Record<number, number>;
   mineType: Record<number, MineType>;
+  // Rock type of every mountain tile, assigned once at map-gen (T2). Dense over
+  // mountains; a missing entry (old saves) is treated as "stone".
+  mountainType: Record<number, MountainType>;
 }
 
 export const HAMLET_CENTER: TileCoord = {
@@ -52,10 +63,26 @@ export function tileAt(map: GameMap, x: number, y: number): TileType {
   return map.tiles[y * map.width + x];
 }
 
-// Water is the only impassable terrain (req §4.2). Buildings will also block
-// tiles in later milestones; that check belongs here when they exist.
-export function isWalkable(map: GameMap, x: number, y: number): boolean {
-  return inBounds(map, x, y) && tileAt(map, x, y) !== "water";
+// Walkability (req §4.2, §13). Water is always impassable. Mountains are
+// impassable too — until a Mine is built on the tile, which makes that mountain
+// walkable so the miner can stand on it to gather ore. Walkability therefore
+// depends on the current buildings; callers with no building context (map-gen,
+// pure terrain checks) omit `buildings`, and every mountain is then impassable.
+export function isWalkable(
+  map: GameMap,
+  x: number,
+  y: number,
+  buildings?: Record<number, Building>,
+): boolean {
+  if (!inBounds(map, x, y)) return false;
+  const t = tileAt(map, x, y);
+  if (t === "water") return false;
+  if (t === "mountain") {
+    if (!buildings) return false;
+    const b = buildingAt(buildings, x, y);
+    return !!b && b.kind === "mine" && isBuilt(b);
+  }
+  return true;
 }
 
 export function countTiles(map: GameMap, type: TileType): number {
@@ -67,6 +94,12 @@ export function countTiles(map: GameMap, type: TileType): number {
 // Wood left on a forest tile; a missing entry means the tile is full (req §12).
 export function forestRemaining(map: GameMap, idx: number): number {
   return map.forestWood[idx] ?? FOREST_WOOD_MAX;
+}
+
+// Rock type of a mountain tile. Old saves predate per-tile typing, so a missing
+// entry falls back to "stone" (T2).
+export function mountainTypeAt(map: GameMap, idx: number): MountainType {
+  return map.mountainType[idx] ?? "stone";
 }
 
 // A land tile hex-adjacent to at least one water tile can fish (req §14).
@@ -146,9 +179,35 @@ function scatter(
   return { rngState: rng, count };
 }
 
+// The town (req §18) sits at a fixed map location far from the Main Hall. We
+// aim at a corner (TOWN_TARGET_FRACTION of the map) and spiral outward for the
+// nearest walkable, non-water grass/stump tile so the unit can always path to
+// it. Pure function of the finished terrain — no RNG, so a seed's town is fixed.
+export function placeTown(map: GameMap): TileCoord {
+  const tx = Math.round(TOWN_TARGET_FRACTION.x * (map.width - 1));
+  const ty = Math.round(TOWN_TARGET_FRACTION.y * (map.height - 1));
+  for (let radius = 0; radius < map.width + map.height; radius++) {
+    let best: TileCoord | null = null;
+    for (let dy = -radius; dy <= radius; dy++) {
+      for (let dx = -radius; dx <= radius; dx++) {
+        if (Math.max(Math.abs(dx), Math.abs(dy)) !== radius) continue; // ring only
+        const x = tx + dx;
+        const y = ty + dy;
+        if (!inBounds(map, x, y) || !isWalkable(map, x, y)) continue;
+        const t = tileAt(map, x, y);
+        if (t === "grass" || t === "stump") { best = { x, y }; break; }
+      }
+      if (best) break;
+    }
+    if (best) return best;
+  }
+  return { x: tx, y: ty }; // fallback (should never hit on a normal map)
+}
+
 export function generateMap(rngState: number): {
   map: GameMap;
   rngState: number;
+  town: TileCoord;
 } {
   const n = MAP_WIDTH * MAP_HEIGHT;
   const tiles: TileType[] = Array.from({ length: n }, () => "grass" as TileType);
@@ -184,8 +243,22 @@ export function generateMap(rngState: number): {
   res = scatter(tiles, "water", Math.round(TERRAIN_TARGET.water * n), 5, 12, seeded.water, rng);
   rng = res.rngState;
 
+  // Roll a rock type for every mountain tile (T2). Done after terrain is final
+  // so the set of mountains is fixed; uses the seeded RNG so a seed is stable.
+  const mountainType: Record<number, MountainType> = {};
+  for (let i = 0; i < n; i++) {
+    if (tiles[i] !== "mountain") continue;
+    let v: number;
+    [rng, v] = rngNext(rng);
+    if (v < MOUNTAIN_TYPE_WEIGHTS.stone) mountainType[i] = "stone";
+    else if (v < MOUNTAIN_TYPE_WEIGHTS.stone + MOUNTAIN_TYPE_WEIGHTS.iron) mountainType[i] = "iron";
+    else mountainType[i] = "gold";
+  }
+
+  const map: GameMap = { width: MAP_WIDTH, height: MAP_HEIGHT, tiles, forestWood: {}, mineType: {}, mountainType };
   return {
-    map: { width: MAP_WIDTH, height: MAP_HEIGHT, tiles, forestWood: {}, mineType: {} },
+    map,
     rngState: rng,
+    town: placeTown(map),
   };
 }

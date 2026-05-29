@@ -5,14 +5,30 @@
 // touching state directly.
 
 import {
+  BARRACKS_HOUSING_CAPACITY,
+  BUILD_TICKS,
+  CRAFT_TICKS,
+  HOUSE_HOUSING_CAPACITY,
+  MAP_WIDTH,
+  TRAIN_TICKS,
+  WORKER_SPAWN_TICKS,
+} from "../config/index.js";
+import {
   barracksHousingCap,
   unitCount,
   workerHousingCap,
 } from "../game/actions.js";
-import { storageCapacity } from "../game/buildings.js";
+import {
+  buildingStorage,
+  isBuilt,
+  storageCapacity,
+  type Building,
+  type BuildingKind,
+} from "../game/buildings.js";
+import { unitAttackRange, unitDefense } from "../game/combat.js";
 import { poolTotal, RESOURCE_TYPES, type ResourceType } from "../game/resources.js";
 import { deriveSeason, type GameState } from "../game/state.js";
-import { maxHp, type Order } from "../game/units.js";
+import { hasHorse, maxHp, type Order } from "../game/units.js";
 import type { View } from "./camera.js";
 
 export interface HudCallbacks {
@@ -66,7 +82,66 @@ function describeOrder(order: Order): string {
         case "trainSoldier": return "Training → soldier";
         case "trainCaptain": return "Training → captain";
       }
+      return "Operating";
+    case "attack":
+      return "Attacking";
+    case "trade":
+      return order.phase === "toTown" ? "Going to town" : "Trading";
   }
+}
+
+const BUILDING_LABEL: Record<BuildingKind, string> = {
+  mainHall: "Main Hall",
+  house: "House",
+  barn: "Barn",
+  smithy: "Smithy",
+  barracks: "Barracks",
+  mine: "Mine",
+};
+
+function pct(progress: number, total: number): number {
+  if (total <= 0) return 100;
+  return Math.min(100, Math.floor((progress / total) * 100));
+}
+
+// Building hover tooltip content (T10): name, health, and whatever stats apply
+// to the kind — storage/housing contribution, in-progress craft/train/spawn, or
+// a mine's rolled yield.
+function describeBuilding(state: GameState, b: Building): { title: string; lines: string[] } {
+  const title = BUILDING_LABEL[b.kind];
+  const lines: string[] = [];
+
+  if (!isBuilt(b)) {
+    lines.push(`Under construction ${pct(b.progress, BUILD_TICKS[b.kind])}%`);
+    lines.push(`HP ${b.hp}/${b.maxHp}`);
+    return { title, lines };
+  }
+
+  lines.push(`HP ${b.hp}/${b.maxHp}`);
+  const storage = buildingStorage(b.kind);
+  if (storage > 0) lines.push(`Storage +${storage}`);
+
+  switch (b.kind) {
+    case "house":
+      lines.push(`Houses ${HOUSE_HOUSING_CAPACITY} workers`);
+      break;
+    case "barracks":
+      lines.push(`Houses ${BARRACKS_HOUSING_CAPACITY} soldiers/captains`);
+      if (b.trainTo) lines.push(`Training → ${b.trainTo} ${pct(b.trainProgress, TRAIN_TICKS)}%`);
+      break;
+    case "smithy":
+      if (b.craftItem) lines.push(`Crafting ${b.craftItem} ${pct(b.craftProgress, CRAFT_TICKS)}%`);
+      break;
+    case "mine": {
+      const mineType = state.map.mineType[b.y * MAP_WIDTH + b.x];
+      if (mineType) lines.push(`Yields ${mineType}`);
+      break;
+    }
+    case "mainHall":
+      if (b.spawning) lines.push(`Raising worker ${pct(b.spawnProgress, WORKER_SPAWN_TICKS)}%`);
+      break;
+  }
+  return { title, lines };
 }
 
 export function createHud(cb: HudCallbacks): Hud {
@@ -77,6 +152,7 @@ export function createHud(cb: HudCallbacks): Hud {
   const resourcesEl = el("hud-resources");
   const storageEl = el("hud-storage");
   const toastEl = el("hud-toast");
+  const noticesEl = el("hud-notifications");
   const popEl = el("hud-population");
   const equipEl = el("hud-equipment");
   const tooltipEl = el("unit-tooltip");
@@ -84,6 +160,9 @@ export function createHud(cb: HudCallbacks): Hud {
   const ttHp = el("tt-hp");
   const ttOrder = el("tt-order");
   const ttCarry = el("tt-carry");
+  const buildingTooltipEl = el("building-tooltip");
+  const btTitle = el("bt-title");
+  const btBody = el("bt-body");
 
   // Build one cell per resource, before the storage readout.
   const countEls = {} as Record<ResourceType, HTMLElement>;
@@ -113,6 +192,36 @@ export function createHud(cb: HudCallbacks): Hud {
     toastTimer = window.setTimeout(() => (toastEl.hidden = true), 1500);
   }
 
+  // Sim event popups (T7). The sim appends to state.notifications; we toast each
+  // one exactly once, tracking the highest id we've shown. Lazily initialised on
+  // the first update so notifications already present in a loaded save (or the
+  // initial state) aren't replayed as if they just happened.
+  let lastNoticeId = -1;
+  let noticesInitialised = false;
+  function pushNotice(message: string): void {
+    const div = document.createElement("div");
+    div.className = "hud-notice";
+    div.textContent = message;
+    noticesEl.appendChild(div);
+    // Fade out, then remove from the DOM so the stack doesn't grow unbounded.
+    window.setTimeout(() => div.classList.add("fading"), 5000);
+    window.setTimeout(() => div.remove(), 5600);
+  }
+  function drainNotifications(state: GameState): void {
+    const notes = state.notifications;
+    if (!noticesInitialised) {
+      // Suppress anything that predates this HUD (e.g. a resumed save).
+      for (const n of notes) lastNoticeId = Math.max(lastNoticeId, n.id);
+      noticesInitialised = true;
+      return;
+    }
+    for (const n of notes) {
+      if (n.id <= lastNoticeId) continue;
+      lastNoticeId = n.id;
+      pushNotice(n.message);
+    }
+  }
+
   function updateTooltip(state: GameState, view: View): void {
     if (view.hoveredUnitId === null) {
       tooltipEl.hidden = true;
@@ -124,19 +233,29 @@ export function createHud(cb: HudCallbacks): Hud {
       return;
     }
 
-    ttTitle.textContent = u.kind.charAt(0).toUpperCase() + u.kind.slice(1);
-    ttHp.textContent = `HP: ${u.hp} / ${maxHp(u.kind)}`;
+    const title = u.kind.charAt(0).toUpperCase() + u.kind.slice(1);
+    ttTitle.textContent = hasHorse(u) ? `${title} 🐴` : title;
+    const horseHp = hasHorse(u) ? ` (+${u.horseHp} horse)` : "";
+    const atk = unitAttackRange(u);
+    ttHp.textContent = `HP ${u.hp}/${maxHp(u.kind)}${horseHp} · Atk ${atk.min}-${atk.max} · Def ${unitDefense(u)}`;
     ttOrder.textContent = describeOrder(u.order);
 
-    const carried: string[] = [];
+    const items: string[] = [];
+    if (u.equipped.sword) items.push("sword");
+    if (u.equipped.shield) items.push("shield");
     for (const t of RESOURCE_TYPES) {
       const v = u.carrying[t] ?? 0;
-      if (v > 0) carried.push(`${v} ${t}`);
+      if (v > 0) items.push(`${v} ${t}`);
     }
-    ttCarry.textContent = carried.length ? `Carrying: ${carried.join(", ")}` : "";
-    ttCarry.hidden = carried.length === 0;
+    ttCarry.textContent = items.length ? `Carrying: ${items.join(", ")}` : "";
+    ttCarry.hidden = items.length === 0;
 
-    // Position near cursor, flipping left/up if close to viewport edge.
+    positionTooltip(tooltipEl, view);
+    tooltipEl.hidden = false;
+  }
+
+  // Position a tooltip near the cursor, flipping left/up near a viewport edge.
+  function positionTooltip(elem: HTMLElement, view: View): void {
     const mx = view.mouseScreenX;
     const my = view.mouseScreenY;
     const vw = window.innerWidth;
@@ -145,9 +264,31 @@ export function createHud(cb: HudCallbacks): Hud {
     const th = 90;
     const left = mx + 18 + tw > vw ? mx - tw - 8 : mx + 18;
     const top = my + th > vh ? my - th : my + 10;
-    tooltipEl.style.left = `${left}px`;
-    tooltipEl.style.top = `${top}px`;
-    tooltipEl.hidden = false;
+    elem.style.left = `${left}px`;
+    elem.style.top = `${top}px`;
+  }
+
+  function updateBuildingTooltip(state: GameState, view: View): void {
+    if (view.hoveredBuildingId === null) {
+      buildingTooltipEl.hidden = true;
+      return;
+    }
+    const b = state.buildings[view.hoveredBuildingId];
+    if (!b) {
+      buildingTooltipEl.hidden = true;
+      return;
+    }
+    const { title, lines } = describeBuilding(state, b);
+    btTitle.textContent = title;
+    btBody.replaceChildren(
+      ...lines.map((line) => {
+        const div = document.createElement("div");
+        div.textContent = line;
+        return div;
+      }),
+    );
+    positionTooltip(buildingTooltipEl, view);
+    buildingTooltipEl.hidden = false;
   }
 
   function update(state: GameState, paused: boolean, view: View): void {
@@ -157,8 +298,9 @@ export function createHud(cb: HudCallbacks): Hud {
     tickEl.textContent = `tick ${state.tickCount}`;
     pausedEl.hidden = !paused;
 
-    for (const t of RESOURCE_TYPES) countEls[t].textContent = String(state.resources[t]);
-    storageEl.textContent = `Storage ${poolTotal(state.resources)}/${storageCapacity(state.buildings)}`;
+    const cap = storageCapacity(state.buildings);
+    for (const t of RESOURCE_TYPES) countEls[t].textContent = `${state.resources[t]}`;
+    storageEl.textContent = `Total ${poolTotal(state.resources)}/${cap}`;
 
     const workers = unitCount(state.units, "worker");
     const soldiers = unitCount(state.units, "soldier");
@@ -169,7 +311,9 @@ export function createHud(cb: HudCallbacks): Hud {
     popEl.textContent = `Pop W:${workers}/${workerCap} · S+C:${soldiers + captains}/${barracksCap} (S:${soldiers} C:${captains})`;
     equipEl.textContent = `Sword:${state.equipment.sword} · Shield:${state.equipment.shield}`;
 
+    drainNotifications(state);
     updateTooltip(state, view);
+    updateBuildingTooltip(state, view);
   }
 
   return { update, flash };

@@ -10,13 +10,23 @@
 import {
   CAMERA_PAN_PX_PER_SEC,
   DRAG_SELECT_THRESHOLD_PX,
-  EDGE_SCROLL_MARGIN_PX,
   HEX_SIZE,
+  type BuildCost,
 } from "../config/index.js";
-import { placementValid } from "../game/actions.js";
-import { buildingAt, type Building } from "../game/buildings.js";
+import {
+  buildableCost,
+  canAfford,
+  placementValid,
+  unitCount,
+  workerHousingCap,
+} from "../game/actions.js";
+import { buildingAt, isBuilt, type Building } from "../game/buildings.js";
+import type { Enemy } from "../game/combat.js";
 import type { BuildableKind, Command } from "../game/commands.js";
+import type { Inventory } from "../game/resources.js";
 import { fieldAt } from "../game/fields.js";
+import { fieldActionInSeason, seasonAt } from "../game/season.js";
+import type { ResourcePool, ResourceType } from "../game/resources.js";
 import { hexToPixel } from "../game/hex.js";
 import { HAMLET_CENTER, inBounds, tileAt } from "../game/map.js";
 import type { GameState } from "../game/state.js";
@@ -63,7 +73,7 @@ const PLACEMENT_KEYS: Record<string, BuildableKind> = {
 };
 
 export interface Controls {
-  update: (dtSec: number) => void; // advance camera from pan/edge-scroll
+  update: (dtSec: number) => void; // advance camera from WASD pan
   getView: () => View;
   setViewport: (w: number, h: number) => void;
 }
@@ -82,11 +92,18 @@ export function createControls(opts: {
   let camera: Camera = centerOnTile(HAMLET_CENTER, viewW, viewH);
   let selection: number[] = [];
   let selectedBuilding: number | null = null;
+  // Tracks the selected Main Hall's worker-production flag so the panel can
+  // rebuild when it flips (start / completion) without polling every frame (T5).
+  let lastSpawning = false;
   let placementKind: BuildableKind | null = null;
   // Pending field action (plough/plant/harvest). Works like building placement:
   // pick the action, then left-click the target cell. null = not in field mode.
   let pendingField: FieldAction | null = null;
   let hoveredUnitId: number | null = null;
+  let hoveredBuildingId: number | null = null;
+  // Build buttons, kept so their affordability (disabled state + cost tooltip)
+  // can be refreshed every frame as resources change — not just on rebuild.
+  let buildButtons: Array<[BuildableKind, HTMLButtonElement]> = [];
 
   const held = new Set<string>();
   const mouse = { x: 0, y: 0, inside: false };
@@ -123,6 +140,9 @@ export function createControls(opts: {
   // grown one. Used both to gate the click and to colour the ghost preview.
   function fieldActionValid(s: GameState, action: FieldAction, tx: number, ty: number): boolean {
     if (!inBounds(s.map, tx, ty)) return false;
+    // Season lock (req §15.3): plant is spring-only, harvest is fall-only. This
+    // also reds out the ghost preview when the action is out of season.
+    if (!fieldActionInSeason(action, seasonAt(s.tickCount))) return false;
     const f = fieldAt(s.fields, tx, ty);
     if (action === "plough") {
       const t = tileAt(s.map, tx, ty);
@@ -130,6 +150,37 @@ export function createControls(opts: {
     }
     if (action === "plant") return !!f && f.stage === "ploughed";
     return !!f && f.stage === "grown"; // harvest
+  }
+
+  // Tooltip text for a build button: the full cost, plus a "Missing:" line
+  // listing the shortfall when the player can't currently afford it.
+  function costTooltip(cost: BuildCost, res: ResourcePool): string {
+    const parts: string[] = [];
+    const missing: string[] = [];
+    for (const k of Object.keys(cost) as ResourceType[]) {
+      const need = cost[k] ?? 0;
+      if (need <= 0) continue;
+      const name = k.charAt(0).toUpperCase() + k.slice(1);
+      parts.push(`${need} ${name}`);
+      const have = res[k] ?? 0;
+      if (have < need) missing.push(`${need - have} ${name}`);
+    }
+    let s = parts.length ? `Cost: ${parts.join(", ")}` : "No cost";
+    if (missing.length) s += `\nMissing: ${missing.join(", ")}`;
+    return s;
+  }
+
+  // Refresh each build button's disabled look + cost tooltip from current
+  // resources. Cheap (6 buttons), so the frame loop calls it every tick.
+  function refreshBuildButtons(): void {
+    const res = getState().resources;
+    for (const [kind, btn] of buildButtons) {
+      const cost = buildableCost(kind);
+      const affordable = canAfford(res, cost);
+      btn.classList.toggle("disabled", !affordable);
+      btn.setAttribute("aria-disabled", String(!affordable));
+      btn.title = costTooltip(cost, res);
+    }
   }
 
   function rebuildActionPanel(): void {
@@ -145,10 +196,17 @@ export function createControls(opts: {
       ["mine", "5 Mine"],
       ["hayField", "6 Hay"],
     ];
+    buildButtons = [];
     for (const [kind, label] of buildKinds) {
-      buildSection.append(
-        apButton(label, () => { placementKind = kind; rebuildActionPanel(); }, placementKind === kind),
-      );
+      const btn = apButton(label, () => {
+        // Guard: ignore clicks on unaffordable builds (kept clickable only so
+        // the cost tooltip stays visible on hover).
+        if (!canAfford(getState().resources, buildableCost(kind))) return;
+        placementKind = kind;
+        rebuildActionPanel();
+      }, placementKind === kind);
+      buildButtons.push([kind, btn]);
+      buildSection.append(btn);
     }
     actionPanel.append(buildSection);
 
@@ -166,6 +224,33 @@ export function createControls(opts: {
         fieldButton("plough", "Plough"),
         fieldButton("plant", "Plant"),
         fieldButton("harvest", "Harvest"),
+      );
+
+      // Equipment toggles (req §6.4) — keyed off the first selected unit's state,
+      // applied to the whole selection (pulls from / returns to the pool).
+      const lead = getState().units[selection[0]];
+      if (lead) {
+        const equip = getState().equipment;
+        const equipButton = (item: "sword" | "shield"): HTMLButtonElement => {
+          const have = lead.equipped[item];
+          const label = `${have ? "Unequip" : "Equip"} ${item.charAt(0).toUpperCase() + item.slice(1)}`;
+          const btn = apButton(label, () => {
+            enqueue({ type: "equip", unitIds: [...selection], item, equip: !have });
+          });
+          // Disable "Equip" when the pool is empty and the lead isn't holding one.
+          if (!have && equip[item] <= 0) {
+            btn.classList.add("disabled");
+            btn.setAttribute("aria-disabled", "true");
+          }
+          return btn;
+        };
+        unitSection.append(equipButton("sword"), equipButton("shield"));
+      }
+
+      // Town actions (req §9, §18): travel to the marketplace to trade.
+      unitSection.append(
+        apButton("Sell at Town", () => { sellRunAtTown([...selection]); }),
+        apButton("Buy Horse", () => { buyHorseRun([...selection]); }),
       );
       actionPanel.append(unitSection);
     }
@@ -186,7 +271,35 @@ export function createControls(opts: {
           );
         }
 
-        if (selection.length > 0) {
+        // Main Hall: raise a new worker for free (T5). Disabled while one is
+        // already in production or when worker housing is full (§7.4).
+        if (b.kind === "mainHall" && isBuilt(b)) {
+          const st = getState();
+          const housingFull =
+            unitCount(st.units, "worker") >= workerHousingCap(st.buildings);
+          const label = b.spawning ? "Creating Worker…" : "Create Worker";
+          const btn = apButton(label, () => {
+            enqueue({ type: "spawnWorker", buildingId: b.id });
+          });
+          if (b.spawning || housingFull) {
+            btn.classList.add("disabled");
+            btn.setAttribute("aria-disabled", "true");
+            btn.title = b.spawning
+              ? "A worker is already being raised"
+              : "No free house slot — build a House first";
+          }
+          bSection.append(btn);
+        }
+
+        // Under construction: workers can resume building. Built but damaged:
+        // workers can repair. (Both need at least one worker selected.)
+        if (selection.length > 0 && !isBuilt(b)) {
+          bSection.append(
+            apButton("Resume", () => {
+              enqueue({ type: "resumeBuild", buildingId: b.id, unitIds: [...selection] });
+            }),
+          );
+        } else if (selection.length > 0 && b.hp < b.maxHp) {
           bSection.append(
             apButton("Repair", () => {
               enqueue({ type: "repair", buildingId: b.id, unitIds: [...selection] });
@@ -194,7 +307,7 @@ export function createControls(opts: {
           );
         }
 
-        if (b.kind === "smithy" && selection.length > 0) {
+        if (b.kind === "smithy" && isBuilt(b) && selection.length > 0) {
           bSection.append(
             apButton("Craft Sword", () => {
               enqueue({ type: "craft", buildingId: b.id, item: "sword", unitIds: [...selection] });
@@ -205,7 +318,7 @@ export function createControls(opts: {
           );
         }
 
-        if (b.kind === "barracks" && selection.length > 0) {
+        if (b.kind === "barracks" && isBuilt(b) && selection.length > 0) {
           const u = getState().units[selection[0]];
           if (u) {
             const toKind: UnitKind | null =
@@ -226,6 +339,8 @@ export function createControls(opts: {
         actionPanel.append(bSection);
       }
     }
+
+    refreshBuildButtons();
   }
 
   // Seed the panel on startup.
@@ -262,8 +377,22 @@ export function createControls(opts: {
     const s = getState();
     if (!inBounds(s.map, tx, ty)) return null;
     const ids = [...selection];
+    // Enemy under the cursor → attack it (req §6.5).
+    const enemy = enemyAtTile(s, tx, ty);
+    if (enemy) return { type: "attack", unitIds: ids, targetEnemyId: enemy.id };
+    // The town tile → just walk there. On arrival (idle at town) the marketplace
+    // interface opens for trading (req §18). The "Sell at Town" / "Buy Horse"
+    // action-panel buttons remain as quick auto-trade shortcuts.
+    if (tx === s.town.x && ty === s.town.y) {
+      return { type: "moveUnits", unitIds: ids, tx, ty };
+    }
     const t = tileAt(s.map, tx, ty);
     const b = buildingAt(s.buildings, tx, ty);
+    // Right-clicking an under-construction building sends the workers to resume
+    // building it (req §7.1: builders can be interrupted and re-tasked).
+    if (b && !isBuilt(b)) {
+      return { type: "resumeBuild", unitIds: ids, buildingId: b.id };
+    }
     // Right-clicking a built mine that the unit can mine: route as `gather`
     // (the sim resolves it). For any other own-building, fall through to move.
     if (b && b.kind === "mine") {
@@ -278,6 +407,45 @@ export function createControls(opts: {
       if (f.stage === "grown") return { type: "field", unitIds: ids, action: "harvest", tx, ty };
     }
     return { type: "moveUnits", unitIds: ids, tx, ty };
+  }
+
+  function enemyAtTile(s: GameState, tx: number, ty: number): Enemy | null {
+    for (const e of Object.values(s.enemies)) {
+      if (Math.round(e.x) === tx && Math.round(e.y) === ty) return e;
+    }
+    return null;
+  }
+
+  // Copy a unit's carried resources into a fresh sell list (req §18). Trades
+  // are issued per-unit so each sells exactly what it is carrying.
+  function carriedSellList(carrying: Inventory): Inventory {
+    const out: Inventory = {};
+    for (const k of Object.keys(carrying) as (keyof Inventory)[]) {
+      const v = carrying[k] ?? 0;
+      if (v > 0) out[k] = v;
+    }
+    return out;
+  }
+
+  // Send each selected unit to town to sell whatever it carries (req §18).
+  function sellRunAtTown(ids: number[]): void {
+    const s = getState();
+    for (const id of ids) {
+      const u = s.units[id];
+      if (!u) continue;
+      enqueue({ type: "trade", unitIds: [id], sell: carriedSellList(u.carrying), buy: {}, buyHorse: false });
+    }
+  }
+
+  // Send each selected unit to town to buy a horse, funding it by selling its
+  // carried goods (req §9, §18). A unit already mounted is skipped by the sim.
+  function buyHorseRun(ids: number[]): void {
+    const s = getState();
+    for (const id of ids) {
+      const u = s.units[id];
+      if (!u) continue;
+      enqueue({ type: "trade", unitIds: [id], sell: carriedSellList(u.carrying), buy: {}, buyHorse: true });
+    }
   }
 
   function boxSelect(): void {
@@ -327,11 +495,12 @@ export function createControls(opts: {
       rebuildActionPanel();
       return;
     }
-    // Building click: pick the building under the tile (if any).
+    // Building click: pick the building under the tile (if any). Keep any
+    // selected units so the Building-section actions that need workers (Resume,
+    // Repair, Craft, Train) are reachable — select the workers, then the building.
     const b = buildingAt(getState().buildings, tx, ty);
     if (b) {
       selectedBuilding = b.id;
-      selection = [];
       rebuildActionPanel();
       return;
     }
@@ -343,7 +512,11 @@ export function createControls(opts: {
 
   canvas.addEventListener("contextmenu", (e) => e.preventDefault());
   canvas.addEventListener("mouseenter", () => (mouse.inside = true));
-  canvas.addEventListener("mouseleave", () => { mouse.inside = false; hoveredUnitId = null; });
+  canvas.addEventListener("mouseleave", () => {
+    mouse.inside = false;
+    hoveredUnitId = null;
+    hoveredBuildingId = null;
+  });
 
   canvas.addEventListener("mousemove", (e) => {
     const p = pos(e);
@@ -351,6 +524,15 @@ export function createControls(opts: {
     mouse.y = p.y;
     mouse.inside = true;
     hoveredUnitId = unitAtScreen(p.x, p.y);
+    // A hovered unit takes precedence; otherwise surface the building under the
+    // cursor for its tooltip (T10).
+    if (hoveredUnitId === null) {
+      const tile = screenToHex(camera, p.x, p.y);
+      const b = buildingAt(getState().buildings, tile.x, tile.y);
+      hoveredBuildingId = b ? b.id : null;
+    } else {
+      hoveredBuildingId = null;
+    }
     if (drag.active) {
       drag.curX = p.x;
       drag.curY = p.y;
@@ -503,6 +685,21 @@ export function createControls(opts: {
   window.addEventListener("keyup", (e) => held.delete(e.code));
 
   function update(dtSec: number): void {
+    // Keep build-button affordability + cost tooltips in sync with the live
+    // resource pool (the panel itself only rebuilds on selection change).
+    refreshBuildButtons();
+
+    // Rebuild the panel when a selected Main Hall starts/finishes raising a
+    // worker, so the Create Worker button reflects the live state (T5).
+    if (selectedBuilding !== null) {
+      const sel = getState().buildings[selectedBuilding];
+      const spawning = sel?.kind === "mainHall" && sel.spawning;
+      if (spawning !== lastSpawning) {
+        lastSpawning = spawning;
+        rebuildActionPanel();
+      }
+    }
+
     let dx = 0;
     let dy = 0;
     for (const code of held) {
@@ -511,12 +708,6 @@ export function createControls(opts: {
         dx += d[0];
         dy += d[1];
       }
-    }
-    if (mouse.inside) {
-      if (mouse.x < EDGE_SCROLL_MARGIN_PX) dx -= 1;
-      else if (mouse.x > viewW - EDGE_SCROLL_MARGIN_PX) dx += 1;
-      if (mouse.y < EDGE_SCROLL_MARGIN_PX) dy -= 1;
-      else if (mouse.y > viewH - EDGE_SCROLL_MARGIN_PX) dy += 1;
     }
     if (dx !== 0 || dy !== 0) {
       const len = Math.hypot(dx, dy) || 1;
@@ -563,6 +754,7 @@ export function createControls(opts: {
       dragBox,
       placement: placementGhost(),
       hoveredUnitId,
+      hoveredBuildingId,
       mouseScreenX: mouse.x,
       mouseScreenY: mouse.y,
     };

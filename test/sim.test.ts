@@ -110,8 +110,9 @@ describe("save / load", () => {
       [{ type: "gather", unitIds: [id], tx: forest!.x, ty: forest!.y }],
       1,
     );
-    // Long enough to walk + chop + deplete + carry/deposit something.
-    state = update(state, [], 30 * 200);
+    // One gather cycle (walk + chop + deplete + deposit), kept inside the first
+    // season so M4 upkeep (§6.3) doesn't enter into this save/load round-trip.
+    state = update(state, [], 30 * 50);
     expect(state.resources.wood).toBeGreaterThan(0);
     expect(state.units[id].order.type).not.toBe(undefined);
     expect(u).not.toBe(state.units[id]);

@@ -15,7 +15,7 @@ function makeMap(rows: string[]): GameMap {
   for (const row of rows) {
     for (const ch of row) tiles.push(ch === "~" ? "water" : "grass");
   }
-  return { width, height, tiles, forestWood: {}, mineType: {} };
+  return { width, height, tiles, forestWood: {}, mineType: {}, mountainType: {} };
 }
 
 describe("findPath (hex A*)", () => {

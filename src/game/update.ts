@@ -15,16 +15,24 @@ import {
   canAfford,
   payCost,
   placementValid,
+  processSeasonTransitions,
+  releaseOccupancy,
+  startAttack,
   startBuild,
   startField,
   startGather,
   startMove,
   startOperate,
+  startTrade,
+  executeHallStore,
+  executeTownStore,
+  executeTownTrade,
   type SimCtx,
 } from "./actions.js";
 import {
   barracksHousingCap,
   unitCount,
+  workerHousingCap,
 } from "./actions.js";
 import {
   isBuilt,
@@ -33,10 +41,13 @@ import {
   type Building,
   type BuildingKind,
 } from "./buildings.js";
+import { stepCombat, type Enemy } from "./combat.js";
 import type { Command } from "./commands.js";
 import { makeField, type Field } from "./fields.js";
 import type { GameMap } from "./map.js";
-import type { EquipmentPool, GameState } from "./state.js";
+import { fieldActionInSeason, seasonAt } from "./season.js";
+import { MAX_NOTIFICATIONS, type EquipmentPool, type GameState } from "./state.js";
+import type { CraftItem } from "./buildings.js";
 import type { OperateMode, Unit, UnitKind } from "./units.js";
 
 export function update(
@@ -50,7 +61,9 @@ export function update(
   const units: Record<number, Unit> = { ...state.units };
   const buildings: Record<number, Building> = { ...state.buildings };
   const fields: Record<number, Field> = { ...state.fields };
+  const enemies: Record<number, Enemy> = { ...state.enemies };
   const equipment: EquipmentPool = { ...state.equipment };
+  const townStorage = { ...state.townStorage };
 
   const map: GameMap = {
     width: state.map.width,
@@ -58,6 +71,7 @@ export function update(
     tiles: state.map.tiles.slice(),
     forestWood: { ...state.map.forestWood },
     mineType: { ...state.map.mineType },
+    mountainType: { ...state.map.mountainType },
   };
   const ctx: SimCtx = {
     map,
@@ -65,10 +79,14 @@ export function update(
     capacity: storageCapacity(buildings),
     buildings,
     fields,
+    enemies,
     equipment,
+    town: state.town,
+    townStorage,
     rngState: state.rngState,
     tickCount: state.tickCount + dtTicks,
     nextId: state.nextEntityId,
+    notifications: state.notifications.slice(),
   };
 
   // 1) Commands become unit orders (and possibly new buildings/fields).
@@ -85,8 +103,19 @@ export function update(
   // 3) Per-building work (smithy crafting, barracks training).
   advanceBuildings(ctx, dtTicks, units);
 
-  // 4) Mature any planted crops that have grown long enough.
+  // 4) Combat resolution (req §17.1): adjacent units/enemies trade blows once
+  // per second. Runs after movement so a unit that just stepped adjacent (via an
+  // attack order or auto-defence) can swing this step. A killed unit frees any
+  // building slot it held.
+  stepCombat(ctx, units, dtTicks, (u) => releaseOccupancy(ctx, u));
+
+  // 5) Mature any planted crops that have grown long enough.
   advanceFieldGrowth(ctx);
+
+  // 6) End-of-season settlement for any season boundary this step crossed:
+  // upkeep + demotion (§6.3), crop loss at fall's end (§11.5), forest regrowth
+  // at spring (§12). Runs last so it settles against this step's results.
+  processSeasonTransitions(ctx, state.tickCount, units);
 
   // Storage capacity can change mid-step if a build completed; keep `capacity`
   // synced so a follow-up deposit (next step) uses the right value.
@@ -98,11 +127,15 @@ export function update(
     units,
     buildings: ctx.buildings,
     fields: ctx.fields,
+    enemies: ctx.enemies,
     resources: ctx.resources,
     equipment: ctx.equipment,
+    townStorage: ctx.townStorage,
     rngState: ctx.rngState,
     nextEntityId: ctx.nextId,
     tickCount: ctx.tickCount,
+    // Keep only the most recent events so the log (and save) stays bounded (T7).
+    notifications: ctx.notifications.slice(-MAX_NOTIFICATIONS),
   };
 }
 
@@ -112,7 +145,7 @@ function handleCommand(cmd: Command, ctx: SimCtx, units: Record<number, Unit>): 
       const u = units[id];
       if (!u) continue;
       ejectIfInside(u, ctx);
-      units[id] = { ...u, insideBuildingId: null, order: startMove(ctx.map, u, cmd.tx, cmd.ty) };
+      units[id] = { ...u, insideBuildingId: null, order: startMove(ctx.map, u, cmd.tx, cmd.ty, ctx.buildings) };
     }
     return;
   }
@@ -126,11 +159,14 @@ function handleCommand(cmd: Command, ctx: SimCtx, units: Record<number, Unit>): 
     return;
   }
   if (cmd.type === "field") {
+    // Season lock (req §15.3): reject planting outside spring / harvesting
+    // outside fall up front, so the order is never even created.
+    if (!fieldActionInSeason(cmd.action, seasonAt(ctx.tickCount))) return;
     for (const id of cmd.unitIds) {
       const u = units[id];
       if (!u) continue;
       ejectIfInside(u, ctx);
-      units[id] = { ...u, insideBuildingId: null, order: startField(ctx.map, u, cmd.action, cmd.tx, cmd.ty) };
+      units[id] = { ...u, insideBuildingId: null, order: startField(ctx.map, u, cmd.action, cmd.tx, cmd.ty, ctx.buildings) };
     }
     return;
   }
@@ -148,7 +184,22 @@ function handleCommand(cmd: Command, ctx: SimCtx, units: Record<number, Unit>): 
       units[id] = {
         ...u,
         insideBuildingId: null,
-        order: startBuild(ctx.map, u, b.id, true, { x: b.x, y: b.y }),
+        order: startBuild(ctx.map, u, b.id, true, { x: b.x, y: b.y }, ctx.buildings),
+      };
+    }
+    return;
+  }
+  if (cmd.type === "resumeBuild") {
+    const b = ctx.buildings[cmd.buildingId];
+    if (!b || isBuilt(b)) return; // only unfinished buildings can be resumed
+    for (const id of cmd.unitIds) {
+      const u = units[id];
+      if (!u || u.kind !== "worker") continue; // §6.1: only workers build
+      ejectIfInside(u, ctx);
+      units[id] = {
+        ...u,
+        insideBuildingId: null,
+        order: startBuild(ctx.map, u, b.id, false, { x: b.x, y: b.y }, ctx.buildings),
       };
     }
     return;
@@ -184,7 +235,7 @@ function handleCommand(cmd: Command, ctx: SimCtx, units: Record<number, Unit>): 
       if (!u) continue;
       if (u.kind !== "worker") continue; // only workers operate the smithy
       ejectIfInside(u, ctx);
-      units[id] = { ...u, insideBuildingId: null, order: startOperate(ctx.map, u, b, mode) };
+      units[id] = { ...u, insideBuildingId: null, order: startOperate(ctx.map, u, b, mode, ctx.buildings) };
       break; // one operator only
     }
     return;
@@ -206,9 +257,65 @@ function handleCommand(cmd: Command, ctx: SimCtx, units: Record<number, Unit>): 
         : null;
       if (validSource === null || u.kind !== validSource) continue;
       ejectIfInside(u, ctx);
-      units[id] = { ...u, insideBuildingId: null, order: startOperate(ctx.map, u, b, mode) };
+      units[id] = { ...u, insideBuildingId: null, order: startOperate(ctx.map, u, b, mode, ctx.buildings) };
       break; // one trainee per barracks
     }
+    return;
+  }
+  if (cmd.type === "spawnWorker") {
+    const b = ctx.buildings[cmd.buildingId];
+    if (!b || b.kind !== "mainHall" || !isBuilt(b)) return;
+    if (b.spawning) return; // already raising a worker
+    // Housing gate (§7.4): a new worker needs a free House slot.
+    if (unitCount(units, "worker") >= workerHousingCap(ctx.buildings)) return;
+    ctx.buildings[cmd.buildingId] = { ...b, spawning: true, spawnProgress: 0 };
+    return;
+  }
+  if (cmd.type === "attack") {
+    if (!ctx.enemies[cmd.targetEnemyId]) return;
+    for (const id of cmd.unitIds) {
+      const u = units[id];
+      if (!u) continue;
+      ejectIfInside(u, ctx);
+      units[id] = { ...u, insideBuildingId: null, order: startAttack(ctx, u, cmd.targetEnemyId) };
+    }
+    return;
+  }
+  if (cmd.type === "equip") {
+    handleEquip(cmd, ctx, units);
+    return;
+  }
+  if (cmd.type === "trade") {
+    for (const id of cmd.unitIds) {
+      const u = units[id];
+      if (!u) continue;
+      ejectIfInside(u, ctx);
+      units[id] = {
+        ...u,
+        insideBuildingId: null,
+        order: startTrade(ctx.map, ctx.town, u, cmd.sell, cmd.buy, cmd.buyHorse, ctx.buildings),
+      };
+    }
+    return;
+  }
+  if (cmd.type === "townStore") {
+    const u = units[cmd.unitId];
+    if (!u) return;
+    units[cmd.unitId] = executeTownStore(ctx, u, cmd.resource, cmd.amount, cmd.toStorage);
+    return;
+  }
+  if (cmd.type === "hallStore") {
+    const u = units[cmd.unitId];
+    const b = ctx.buildings[cmd.buildingId];
+    if (!u || !b) return;
+    units[cmd.unitId] = executeHallStore(ctx, u, b, cmd.resource, cmd.amount, cmd.toStorage);
+    return;
+  }
+  if (cmd.type === "townTrade") {
+    const u = units[cmd.unitId];
+    if (!u) return;
+    const updated = executeTownTrade(ctx, u, cmd.cart, cmd.buyHorse, cmd.offerUnit, cmd.offerStorage);
+    if (updated) units[cmd.unitId] = updated;
     return;
   }
   if (cmd.type === "cancel") {
@@ -219,6 +326,31 @@ function handleCommand(cmd: Command, ctx: SimCtx, units: Record<number, Unit>): 
       units[id] = { ...u, insideBuildingId: null, order: { type: "idle" } };
     }
     return;
+  }
+}
+
+// Equip/unequip a sword or shield (req §6.4). Instant: pulls from / returns to
+// the global equipment pool and toggles the unit's `equipped` flag. Any unit
+// kind may equip; equipping eats a carry slot (enforced in carryCap).
+function handleEquip(
+  cmd: Extract<Command, { type: "equip" }>,
+  ctx: SimCtx,
+  units: Record<number, Unit>,
+): void {
+  const item: CraftItem = cmd.item;
+  for (const id of cmd.unitIds) {
+    const u = units[id];
+    if (!u) continue;
+    if (cmd.equip) {
+      if (u.equipped[item]) continue; // already has one
+      if (ctx.equipment[item] <= 0) continue; // none available in the pool
+      ctx.equipment[item]--;
+      units[id] = { ...u, equipped: { ...u.equipped, [item]: true } };
+    } else {
+      if (!u.equipped[item]) continue;
+      ctx.equipment[item]++;
+      units[id] = { ...u, equipped: { ...u.equipped, [item]: false } };
+    }
   }
 }
 
@@ -244,7 +376,7 @@ function handleBuildPlacement(
       units[uid] = {
         ...u,
         insideBuildingId: null,
-        order: startBuild(ctx.map, u, -id, false, { x: cmd.tx, y: cmd.ty }),
+        order: startBuild(ctx.map, u, -id, false, { x: cmd.tx, y: cmd.ty }, ctx.buildings),
       };
     }
     return;
@@ -259,7 +391,7 @@ function handleBuildPlacement(
     units[uid] = {
       ...u,
       insideBuildingId: null,
-      order: startBuild(ctx.map, u, id, false, { x: cmd.tx, y: cmd.ty }),
+      order: startBuild(ctx.map, u, id, false, { x: cmd.tx, y: cmd.ty }, ctx.buildings),
     };
   }
 }

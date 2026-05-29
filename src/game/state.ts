@@ -3,16 +3,17 @@
 // whole object is JSON.stringify-able with no cycles.
 
 import {
-  SEASONS,
   STARTING_WHEAT,
-  TICKS_PER_SEASON,
   TICKS_PER_SECOND,
+  TICKS_PER_SEASON,
   TICKS_PER_YEAR,
   type Season,
 } from "../config/index.js";
+import { seasonAt, seasonIndexAt } from "./season.js";
 import { makeBuilding, type Building, type BuildingKind } from "./buildings.js";
+import type { Enemy } from "./combat.js";
 import type { Field } from "./fields.js";
-import { generateMap, HAMLET_CENTER, type GameMap } from "./map.js";
+import { generateMap, HAMLET_CENTER, type GameMap, type TileCoord } from "./map.js";
 import { emptyPool, type ResourcePool } from "./resources.js";
 import { makeWorker, type Unit } from "./units.js";
 
@@ -24,7 +25,29 @@ import { makeWorker, type Unit } from "./units.js";
 //
 // Previous bumps: 2 (M2 — fields/buildings/resources), 3 (M3 — build
 // progress/occupants/equipment).
-export const SAVE_VERSION = 4;
+//
+// M4 (seasons/upkeep) added no new persisted fields — the calendar is derived
+// from `tickCount` and upkeep/crop-loss/regrowth mutate existing state — so the
+// serialized shape is unchanged and the version stays at 4.
+//
+// Bumped to 5 for M5 (combat/town/horses): units gained `equipped`, `horseHp`,
+// and `attackCooldown`; GameState gained the `enemies` map and the `town` tile.
+// A v4 save lacks these, so it is rejected by deserialize().
+//
+// Bumped to 6 for the town marketplace interface (req §18): GameState gained
+// `townStorage`, the pool of goods deposited at town (kept separate from
+// `resources` so it does not count against the hamlet storage cap). A v5 save
+// lacks it, so it is rejected by deserialize().
+// v7: per-tile `map.mountainType` (T2) — old saves lack it and are rejected.
+// v8: Building gains `spawning`/`spawnProgress` for Main Hall worker production (T5).
+// v9: GameState gains `notifications` — the rolling event log surfaced to the
+// player when a unit starves/demotes or a horse dies (T7).
+export const SAVE_VERSION = 9;
+
+// Most recent notifications kept on the state (T7). The UI dedups by id and only
+// toasts ones it hasn't shown yet, so this just bounds save size — older entries
+// fall off the front once the cap is exceeded.
+export const MAX_NOTIFICATIONS = 12;
 
 // Equipment crafted at the smithy lives in a small global pool (req §7.2).
 // Units pull from this pool when equipping in M5; the smithy posts here when
@@ -33,6 +56,18 @@ export const SAVE_VERSION = 4;
 export interface EquipmentPool {
   sword: number;
   shield: number;
+}
+
+// A player-facing event (T7). Emitted by the sim when something happens the
+// player should know about but didn't directly order — a worker starving, a
+// unit demoted for unpaid upkeep, a horse lost. `id` is allocated from the same
+// monotonic entity counter so the UI can dedup and toast only new ones.
+export type NotificationKind = "death" | "demotion" | "horse";
+export interface GameNotification {
+  id: number;
+  tick: number;
+  kind: NotificationKind;
+  message: string;
 }
 
 export interface GameState {
@@ -46,8 +81,22 @@ export interface GameState {
   units: Record<number, Unit>;
   buildings: Record<number, Building>;
   fields: Record<number, Field>;
+  // Hostile units (req §6.1, §17). Stationary + injectable in M5; spawning and
+  // AI land in M6. Keyed by id like every other entity (req §2.6).
+  enemies: Record<number, Enemy>;
   resources: ResourcePool;
   equipment: EquipmentPool;
+  // The town marketplace tile (req §18) — a fixed walkable location far from the
+  // Main Hall. View-independent, so it lives in saved state.
+  town: TileCoord;
+  // Goods deposited at the town (req §18). A unit standing at town can move
+  // resources freely between its inventory and this pool, and offer from it in
+  // trades. Deliberately separate from `resources`: items stored here do *not*
+  // count against the hamlet storage cap.
+  townStorage: ResourcePool;
+  // Rolling player-facing event log (T7), capped at MAX_NOTIFICATIONS. Appended
+  // by the sim (upkeep deaths/demotions); the HUD toasts new entries.
+  notifications: GameNotification[];
 }
 
 export function createInitialState(seed: number): GameState {
@@ -96,8 +145,12 @@ export function createInitialState(seed: number): GameState {
     units,
     buildings,
     fields: {},
+    enemies: {},
     resources,
     equipment: { sword: 0, shield: 0 },
+    town: gen.town,
+    townStorage: emptyPool(),
+    notifications: [],
   };
 }
 
@@ -111,13 +164,12 @@ export interface SeasonInfo {
 
 export function deriveSeason(tickCount: number): SeasonInfo {
   const year = Math.floor(tickCount / TICKS_PER_YEAR) + 1;
-  const tickInYear = tickCount % TICKS_PER_YEAR;
-  const seasonIndex = Math.floor(tickInYear / TICKS_PER_SEASON);
-  const tickInSeason = tickInYear % TICKS_PER_SEASON;
+  const seasonIndex = seasonIndexAt(tickCount);
+  const tickInSeason = ((tickCount % TICKS_PER_SEASON) + TICKS_PER_SEASON) % TICKS_PER_SEASON;
   const ticksRemaining = TICKS_PER_SEASON - tickInSeason;
   return {
     year,
-    season: SEASONS[seasonIndex],
+    season: seasonAt(tickCount),
     seasonIndex,
     secondsRemaining: Math.ceil(ticksRemaining / TICKS_PER_SECOND),
   };

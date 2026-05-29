@@ -40,7 +40,7 @@ test("a worker chops, walks back, and deposits wood into the pool", async ({ pag
 
   // Confirm the HUD reflects the deposit.
   await expect(page.locator("#hud-resources")).toContainText("Wood");
-  await expect(page.locator("#hud-storage")).toContainText(/Storage \d+\/40/);
+  await expect(page.locator("#hud-storage")).toContainText(/Total \d+\/40/);
 
   await page.screenshot({ path: "e2e/artifacts/m2-gather.png" });
 });

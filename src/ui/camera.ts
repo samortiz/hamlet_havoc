@@ -42,6 +42,7 @@ export interface View {
   dragBox: DragBox | null; // screen-space, only while drag-selecting
   placement: PlacementGhost | null;
   hoveredUnitId: number | null;
+  hoveredBuildingId: number | null;
   mouseScreenX: number;
   mouseScreenY: number;
 }

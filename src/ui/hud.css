@@ -110,7 +110,8 @@ body {
 }
 
 /* Unit tooltip */
-#unit-tooltip {
+#unit-tooltip,
+#building-tooltip {
   position: absolute;
   pointer-events: none;
   padding: 8px 12px;
@@ -124,7 +125,8 @@ body {
   z-index: 20;
 }
 
-#tt-title {
+#tt-title,
+#bt-title {
   font-weight: 700;
   color: var(--gold);
   font-size: 13px;
@@ -187,6 +189,20 @@ body {
   font-weight: 700;
 }
 
+/* Unaffordable build buttons: greyed out but still hoverable so the cost
+   tooltip (title) explains what's missing. We use a class rather than the
+   native `disabled` attribute precisely so the tooltip still shows. */
+.ap-section button.disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  border-color: rgba(212, 175, 55, 0.2);
+}
+
+.ap-section button.disabled:hover {
+  background: rgba(44, 55, 33, 0.9);
+  border-color: rgba(212, 175, 55, 0.2);
+}
+
 /* Save / load controls — the one part of the HUD that takes pointer events. */
 #hud-controls {
   position: absolute;
@@ -225,10 +241,203 @@ body {
   font-size: 14px;
 }
 
+/* Sim event popups (T7): a stack of warning banners under the top HUD that
+   fade out on their own. Drawn in a warning red/gold so a lost unit is hard
+   to miss. */
+#hud-notifications {
+  position: absolute;
+  top: 120px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: center;
+  pointer-events: none;
+}
+.hud-notice {
+  padding: 8px 18px;
+  background: rgba(58, 22, 18, 0.94);
+  border: 1px solid var(--gold);
+  border-left: 4px solid #d9534f;
+  border-radius: 4px;
+  color: #f3e6c4;
+  font-size: 14px;
+  max-width: 360px;
+  text-align: center;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+  transition: opacity 0.6s ease;
+}
+.hud-notice.fading {
+  opacity: 0;
+}
+
 #hud-debug {
   position: absolute;
   bottom: 6px;
   left: 8px;
   font-size: 12px;
   opacity: 0.7;
+}
+
+/* Town marketplace interface (req §18). A centred modal panel above the canvas;
+   it's the one overlay other than the action panel / controls that takes
+   pointer events, so its buttons are clickable. */
+#town-panel,
+#hall-panel {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: min(760px, 94vw);
+  max-height: 84vh;
+  overflow-y: auto;
+  padding: 12px 14px;
+  background: rgba(28, 35, 22, 0.97);
+  border: 2px solid var(--gold);
+  border-radius: 6px;
+  color: var(--parchment);
+  font-size: 12px;
+  pointer-events: auto;
+  z-index: 30;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.55);
+}
+
+.town-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  padding-bottom: 8px;
+  margin-bottom: 10px;
+  border-bottom: 1px solid rgba(212, 175, 55, 0.4);
+}
+
+.town-title {
+  color: var(--gold);
+  font-weight: 700;
+  font-size: 14px;
+}
+
+.town-header-btns {
+  display: flex;
+  gap: 6px;
+}
+
+.town-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.town-col {
+  border: 1px solid rgba(212, 175, 55, 0.35);
+  border-radius: 4px;
+  padding: 6px 8px;
+  min-height: 60px;
+}
+
+.town-col-title {
+  color: var(--gold);
+  font-weight: 700;
+  margin-bottom: 5px;
+  border-bottom: 1px solid rgba(212, 175, 55, 0.25);
+  padding-bottom: 3px;
+}
+
+.town-col-body {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.town-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.town-row-name {
+  flex: 1;
+  white-space: nowrap;
+}
+
+.town-val {
+  color: var(--gold);
+  opacity: 0.85;
+  font-variant-numeric: tabular-nums;
+}
+
+.town-empty {
+  opacity: 0.6;
+  font-style: italic;
+}
+
+.town-offer-stepper {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.town-offer-count {
+  min-width: 48px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.85;
+}
+
+.town-footer {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 12px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(212, 175, 55, 0.4);
+}
+
+.town-summary {
+  color: var(--gold);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.town-status {
+  flex: 1;
+  opacity: 0.85;
+}
+
+#town-panel button,
+#hall-panel button {
+  font: inherit;
+  font-size: 11px;
+  color: var(--parchment);
+  background: rgba(44, 55, 33, 0.9);
+  border: 1px solid rgba(212, 175, 55, 0.45);
+  border-radius: 3px;
+  padding: 2px 8px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+#town-panel button:hover,
+#hall-panel button:hover {
+  background: var(--brown-dark);
+  border-color: var(--gold);
+}
+
+#town-panel button.disabled,
+#hall-panel button.disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+#town-panel button.disabled:hover,
+#hall-panel button.disabled:hover {
+  background: rgba(44, 55, 33, 0.9);
+  border-color: rgba(212, 175, 55, 0.45);
+}
+
+.town-confirm {
+  font-weight: 700;
+  border-color: var(--gold) !important;
 }

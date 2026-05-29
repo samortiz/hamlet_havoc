@@ -1,10 +1,14 @@
 // Worker gather loop (req §10–§14): a worker walks to a resource tile, fills
 // to its carry cap, deposits at the nearest storage, and (when applicable)
 // returns for more. Headless sim tests; the e2e suite checks the browser path.
+//
+// These exercises run inside the opening Spring season (under 60s) or stock
+// meat so M4 end-of-season upkeep (§6.3) doesn't starve the worker mid-test.
 
 import { describe, expect, it } from "vitest";
-import { FOREST_WOOD_MAX, TICKS_PER_SECOND } from "../src/config/index.js";
+import { FOREST_WOOD_MAX, TICKS_PER_SECOND, WOOD_ROAM_RADIUS } from "../src/config/index.js";
 import { storageCapacity } from "../src/game/buildings.js";
+import { hexDistance } from "../src/game/hex.js";
 import { tileAt, type TileType } from "../src/game/map.js";
 import { poolTotal } from "../src/game/resources.js";
 import { createInitialState, type GameState } from "../src/game/state.js";
@@ -45,8 +49,8 @@ describe("wood gathering", () => {
     expect(forest).not.toBeNull();
 
     s = update(s, [{ type: "gather", unitIds: [id], tx: forest!.x, ty: forest!.y }], 1);
-    // Generous bulk advance: walk out + 5×15s chops + walk back + deposit.
-    s = update(s, [], TICKS_PER_SECOND * 200);
+    // Walk out + 5×5s chops + walk back + deposit; stays within the first season.
+    s = update(s, [], TICKS_PER_SECOND * 50);
 
     expect(s.resources.wood).toBeGreaterThanOrEqual(FOREST_WOOD_MAX);
   });
@@ -58,9 +62,56 @@ describe("wood gathering", () => {
     const forest = findNearestTile(s, "forest", w.x, w.y)!;
 
     s = update(s, [{ type: "gather", unitIds: [id], tx: forest.x, ty: forest.y }], 1);
-    s = update(s, [], TICKS_PER_SECOND * 200);
+    s = update(s, [], TICKS_PER_SECOND * 50);
 
     expect(tileAt(s.map, forest.x, forest.y)).toBe("stump");
+  });
+});
+
+// A forest tile that has at least one other forest tile within `radius` hexes,
+// so a worker who chops it out has somewhere nearby to roam to.
+function findForestWithNeighbor(
+  s: GameState,
+  radius: number,
+): { x: number; y: number } | null {
+  const W = s.map.width;
+  const H = s.map.height;
+  const isForest = (x: number, y: number) =>
+    x >= 0 && y >= 0 && x < W && y < H && s.map.tiles[y * W + x] === "forest";
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      if (!isForest(x, y)) continue;
+      for (let ny = y - radius; ny <= y + radius; ny++) {
+        for (let nx = x - radius; nx <= x + radius; nx++) {
+          if ((nx === x && ny === y) || hexDistance({ x, y }, { x: nx, y: ny }) > radius) continue;
+          if (isForest(nx, ny)) return { x, y };
+        }
+      }
+    }
+  }
+  return null;
+}
+
+describe("wood roaming (req: hop to a nearby tree once a tile is chopped out)", () => {
+  it("keeps chopping a neighbouring forest tile after depleting the first", () => {
+    let s = createInitialState(777);
+    const id = firstWorkerId(s);
+    const start = findForestWithNeighbor(s, WOOD_ROAM_RADIUS);
+    expect(start).not.toBeNull();
+
+    // Stock food so end-of-season upkeep (§6.3) doesn't starve the worker over
+    // the multi-season run this needs to chop through more than one tile.
+    s = { ...s, resources: { ...s.resources, meat: 30 } };
+    s = update(s, [{ type: "gather", unitIds: [id], tx: start!.x, ty: start!.y }], 1);
+    s = update(s, [], TICKS_PER_SECOND * 200);
+
+    // The first tile is now a stump...
+    expect(tileAt(s.map, start!.x, start!.y)).toBe("stump");
+    // ...and more than one tile's worth of wood was gathered, which is only
+    // possible if the worker roamed to a second tree rather than stopping.
+    const w = s.units[id];
+    const total = s.resources.wood + (w.carrying.wood ?? 0);
+    expect(total).toBeGreaterThan(FOREST_WOOD_MAX);
   });
 });
 
@@ -72,7 +123,8 @@ describe("fishing", () => {
     const water = findNearestTile(s, "water", w.x, w.y)!;
 
     s = update(s, [{ type: "gather", unitIds: [id], tx: water.x, ty: water.y }], 1);
-    s = update(s, [], TICKS_PER_SECOND * 200);
+    // Within the opening Spring, so the meat measured is purely fished (no upkeep).
+    s = update(s, [], TICKS_PER_SECOND * 50);
 
     expect(s.resources.meat).toBeGreaterThan(0);
   });
@@ -87,7 +139,9 @@ describe("mining", () => {
 
     // M3: mining requires a built mine on the mountain tile (req §13).
     // Mine costs 4 wood — stock it and build the mine first, then mine it.
-    s = { ...s, resources: { ...s.resources, wood: 10 } };
+    // Stock some meat (within storage cap) so upkeep doesn't starve the miner
+    // over the long run (§6.3) — but not so much that the pool can't take ore.
+    s = { ...s, resources: { ...s.resources, wood: 10, meat: 25 } };
     s = update(s, [{ type: "build", unitIds: [id], kind: "mine", tx: mountain.x, ty: mountain.y }], 1);
     s = update(s, [], TICKS_PER_SECOND * 60);
     s = update(s, [{ type: "gather", unitIds: [id], tx: mountain.x, ty: mountain.y }], 1);
@@ -120,7 +174,8 @@ describe("deposit respects pooled storage capacity (req §8.1)", () => {
 
     const forest = findNearestTile(s, "forest", w.x, w.y)!;
     s = update(s, [{ type: "gather", unitIds: [id], tx: forest.x, ty: forest.y }], 1);
-    s = update(s, [], TICKS_PER_SECOND * 250);
+    // Kept under the first season boundary so upkeep doesn't eat from the pool.
+    s = update(s, [], TICKS_PER_SECOND * 50);
 
     // Cap reached, not exceeded.
     expect(poolTotal(s.resources)).toBe(cap);

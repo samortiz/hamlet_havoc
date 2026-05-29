@@ -38,13 +38,27 @@
           <button id="btn-save" type="button">Save</button>
           <button id="btn-load" type="button">Load</button>
         </div>
+        <!-- Town marketplace interface (req §18): shown when a unit reaches town. -->
+        <!-- Populated by ui/town.ts; pointer-events enabled so it's interactive. -->
+        <div id="town-panel" hidden></div>
+        <!-- Hall/storage load-unload interface (T9): shown when a built storage -->
+        <!-- building is selected with a unit on/beside it. Populated by ui/hall.ts. -->
+        <div id="hall-panel" hidden></div>
         <div id="hud-toast" hidden></div>
+        <!-- Stacked warning popups for sim events (unit lost/demoted, T7). -->
+        <!-- Populated by hud.ts; each entry fades out on its own. -->
+        <div id="hud-notifications"></div>
         <!-- Unit tooltip: shown on hover; positioned by hud.ts. -->
         <div id="unit-tooltip" hidden>
           <div id="tt-title"></div>
           <div id="tt-hp"></div>
           <div id="tt-order"></div>
           <div id="tt-carry" hidden></div>
+        </div>
+        <!-- Building tooltip: shown on hover (T10); positioned by hud.ts. -->
+        <div id="building-tooltip" hidden>
+          <div id="bt-title"></div>
+          <div id="bt-body"></div>
         </div>
         <div id="hud-debug">
           <span id="hud-tick">tick 0</span>

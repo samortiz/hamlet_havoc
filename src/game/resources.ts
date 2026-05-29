@@ -46,3 +46,12 @@ export function carriedTotal(inv: Inventory): number {
   for (const t of RESOURCE_TYPES) total += inv[t] ?? 0;
   return total;
 }
+
+// Total trade worth of an inventory at the listed per-resource values (req §8).
+// Used by the town marketplace (req §18) to compare an offer against a cart and
+// to value sales.
+export function inventoryValue(inv: Inventory): number {
+  let total = 0;
+  for (const t of RESOURCE_TYPES) total += (inv[t] ?? 0) * RESOURCE_VALUE[t];
+  return total;
+}

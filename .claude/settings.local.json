@@ -32,7 +32,8 @@
       "Bash(curl -fsS http://localhost:5173/ -o /dev/null -w \"index: %{http_code}\\\\n\")",
       "Bash(curl -fsS http://localhost:5173/assets/sprites/terrain_grass.png -o /dev/null -w \"grass png: %{http_code} \\(%{size_download} bytes\\)\\\\n\")",
       "Bash(curl -fsS http://localhost:5173/assets/sprites/building_mainHall.png -o /dev/null -w \"castle png: %{http_code} \\(%{size_download} bytes\\)\\\\n\")",
-      "Bash(node -e \"require.resolve\\('@playwright/test'\\)\")"
+      "Bash(node -e \"require.resolve\\('@playwright/test'\\)\")",
+      "Bash(grep -rn \"= [0-9]\\\\+\\\\|= '[^']*'\\\\|= \\\\`\" /home/sortiz/projects/hamlet_havoc/src/game/ --include=\"*.ts\")"
     ]
   }
 }

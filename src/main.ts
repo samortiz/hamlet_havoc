@@ -12,6 +12,8 @@ import { createRenderer } from "./render/renderer.js";
 import type { View } from "./ui/camera.js";
 import { createControls } from "./ui/controls.js";
 import { createHud, type Hud } from "./ui/hud.js";
+import { createTownPanel } from "./ui/town.js";
+import { createHallPanel } from "./ui/hall.js";
 import type { GameState } from "./game/state.js";
 
 const STEP_MS = 1000 / TICKS_PER_SECOND;
@@ -115,6 +117,22 @@ function main(): void {
     actionPanel: actionPanelEl,
   });
 
+  const townPanelEl = document.getElementById("town-panel");
+  if (!(townPanelEl instanceof HTMLElement)) throw new Error("#town-panel not found");
+  const townPanel = createTownPanel({
+    container: townPanelEl,
+    getState: () => state,
+    enqueue: (cmd) => commandQueue.push(cmd),
+  });
+
+  const hallPanelEl = document.getElementById("hall-panel");
+  if (!(hallPanelEl instanceof HTMLElement)) throw new Error("#hall-panel not found");
+  const hallPanel = createHallPanel({
+    container: hallPanelEl,
+    getState: () => state,
+    enqueue: (cmd) => commandQueue.push(cmd),
+  });
+
   function syncViewport(): void {
     renderer.resize();
     const rect = canvas.getBoundingClientRect();
@@ -145,6 +163,8 @@ function main(): void {
     const view = controls.getView();
     renderer.render(state, view);
     hud.update(state, paused, view);
+    townPanel.update(state);
+    hallPanel.update(state, view);
     requestAnimationFrame(frame);
   }
 

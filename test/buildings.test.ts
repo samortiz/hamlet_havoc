@@ -11,10 +11,12 @@ import {
   HAY_FIELD_BUILD_TICKS,
   TICKS_PER_SECOND,
   TRAIN_TICKS,
+  WORKER_SPAWN_TICKS,
 } from "../src/config/index.js";
-import { isBuilt } from "../src/game/buildings.js";
+import { isBuilt, makeBuilding } from "../src/game/buildings.js";
 import { fieldAt } from "../src/game/fields.js";
-import { HAMLET_CENTER } from "../src/game/map.js";
+import { hexNeighbors } from "../src/game/hex.js";
+import { HAMLET_CENTER, isWalkable } from "../src/game/map.js";
 import { createInitialState, type GameState } from "../src/game/state.js";
 import { update } from "../src/game/update.js";
 
@@ -22,13 +24,22 @@ function firstWorkerId(s: GameState): number {
   return Number(Object.keys(s.units)[0]);
 }
 
+// A mountain a worker can actually build a mine on: it must have at least one
+// walkable (non-mountain, non-water) neighbour to stand adjacent to (req §13).
+// Pick the one nearest the hamlet so the worker can reach it.
 function findMountain(s: GameState): { x: number; y: number } {
+  let best: { x: number; y: number } | null = null;
+  let bestD = Infinity;
   for (let y = 0; y < s.map.height; y++) {
     for (let x = 0; x < s.map.width; x++) {
-      if (s.map.tiles[y * s.map.width + x] === "mountain") return { x, y };
+      if (s.map.tiles[y * s.map.width + x] !== "mountain") continue;
+      if (!hexNeighbors(x, y).some((n) => isWalkable(s.map, n.x, n.y))) continue;
+      const d = (x - HAMLET_CENTER.x) ** 2 + (y - HAMLET_CENTER.y) ** 2;
+      if (d < bestD) { bestD = d; best = { x, y }; }
     }
   }
-  throw new Error("no mountain tile");
+  if (!best) throw new Error("no reachable mountain tile");
+  return best;
 }
 
 function buildingsOfKind(s: GameState, kind: string): number[] {
@@ -54,6 +65,42 @@ describe("construction lifecycle (req §7.1)", () => {
     // Walk + build (req §7.1). 20-sec build + small movement margin.
     s = update(s, [], TICKS_PER_SECOND * 30);
     expect(isBuilt(s.buildings[newHouse.id])).toBe(true);
+  });
+
+  it("resumes an interrupted build with resumeBuild (req §7.1)", () => {
+    let s = createInitialState(2024);
+    const id = firstWorkerId(s);
+    const tx = HAMLET_CENTER.x + 1;
+    const ty = HAMLET_CENTER.y + 3;
+    s = { ...s, resources: { ...s.resources, wood: 10, wheat: 10 } };
+
+    s = update(s, [{ type: "build", unitIds: [id], kind: "house", tx, ty }], 1);
+    const house = Object.values(s.buildings).find((b) => b.x === tx && b.y === ty)!;
+
+    // Build a little, then interrupt the worker before completion.
+    s = update(s, [], TICKS_PER_SECOND * 5);
+    s = update(s, [{ type: "cancel", unitIds: [id] }], 1);
+    const stalled = s.buildings[house.id].progress;
+    expect(isBuilt(s.buildings[house.id])).toBe(false);
+    expect(stalled).toBeGreaterThan(0);
+
+    // With no builder, progress does not advance.
+    s = update(s, [], TICKS_PER_SECOND * 5);
+    expect(s.buildings[house.id].progress).toBe(stalled);
+
+    // Resume with the same worker and let it finish.
+    s = update(s, [{ type: "resumeBuild", unitIds: [id], buildingId: house.id }], 1);
+    s = update(s, [], TICKS_PER_SECOND * 30);
+    expect(isBuilt(s.buildings[house.id])).toBe(true);
+  });
+
+  it("resumeBuild does nothing on an already-completed building", () => {
+    let s = createInitialState(2024);
+    const id = firstWorkerId(s);
+    const mainHall = Object.values(s.buildings).find((b) => b.kind === "mainHall")!;
+    // Main Hall starts complete; resuming it must be a no-op (no idle thrash).
+    s = update(s, [{ type: "resumeBuild", unitIds: [id], buildingId: mainHall.id }], 1);
+    expect(s.units[id].order.type).toBe("idle");
   });
 
   it("rejects placement on an invalid tile (water) and refunds nothing", () => {
@@ -102,6 +149,32 @@ describe("mine placement + type rolling (req §13)", () => {
     const mine = Object.values(s.buildings).find((b) => b.x === m.x && b.y === m.y)!;
     expect(isBuilt(mine)).toBe(true);
     expect(s.map.mineType[m.y * s.map.width + m.x]).toMatch(/stone|iron|gold/);
+  });
+
+  it("a mountain blocks movement until its mine is built, then is walkable (req §13)", () => {
+    let s = createInitialState(2024);
+    const id = firstWorkerId(s);
+    const m = findMountain(s);
+    // Stock wood for the mine + plenty of food so the worker survives the
+    // season-boundary upkeep crossed while building (SECONDS_PER_SEASON = 60).
+    s = { ...s, resources: { ...s.resources, wood: 10, meat: 99, wheat: 99 } };
+
+    // Ordering a move onto the bare mountain finds no path → unit stays idle.
+    s = update(s, [{ type: "moveUnits", unitIds: [id], tx: m.x, ty: m.y }], 1);
+    expect(s.units[id].order.type).toBe("idle");
+
+    // Build the mine (worker stands adjacent), then the mountain opens up.
+    s = update(s, [{ type: "build", unitIds: [id], kind: "mine", tx: m.x, ty: m.y }], 1);
+    s = update(s, [], TICKS_PER_SECOND * 60);
+    expect(isBuilt(Object.values(s.buildings).find((b) => b.x === m.x && b.y === m.y)!)).toBe(true);
+
+    // Now a move onto the mined mountain succeeds and the worker (left adjacent
+    // by the build) arrives on the tile.
+    s = update(s, [{ type: "moveUnits", unitIds: [id], tx: m.x, ty: m.y }], 1);
+    expect(s.units[id].order.type).not.toBe("idle");
+    s = update(s, [], TICKS_PER_SECOND * 5);
+    expect(Math.round(s.units[id].x)).toBe(m.x);
+    expect(Math.round(s.units[id].y)).toBe(m.y);
   });
 });
 
@@ -155,7 +228,8 @@ describe("smithy crafting (req §7.2)", () => {
     const sy = HAMLET_CENTER.y;
     s = {
       ...s,
-      resources: { ...s.resources, wood: 50, wheat: 10, stone: 10, iron: 20 },
+      // meat:99 keeps the smithy operator fed across season-end upkeep (§6.3).
+      resources: { ...s.resources, wood: 50, wheat: 10, stone: 10, iron: 20, meat: 99 },
     };
     s = update(s, [{ type: "build", unitIds: [id], kind: "smithy", tx: sx, ty: sy }], 1);
     s = update(s, [], TICKS_PER_SECOND * 80); // finish smithy (60s) + walk
@@ -184,7 +258,8 @@ describe("barracks training (req §7.3, §7.4)", () => {
     const by = HAMLET_CENTER.y + 4;
     s = {
       ...s,
-      resources: { ...s.resources, wood: 20, wheat: 10, stone: 10, iron: 10 },
+      // meat:99 keeps the trainee fed across season-end upkeep (§6.3).
+      resources: { ...s.resources, wood: 20, wheat: 10, stone: 10, iron: 10, meat: 99 },
     };
     s = update(s, [{ type: "build", unitIds: [id], kind: "barracks", tx: bx, ty: by }], 1);
     s = update(s, [], TICKS_PER_SECOND * 80);
@@ -217,6 +292,9 @@ describe("barracks training (req §7.3, §7.4)", () => {
       hp: 2,
       carrying: {},
       insideBuildingId: null,
+      equipped: { sword: false, shield: false },
+      horseHp: 0,
+      attackCooldown: 0,
       order: { type: "idle" },
     };
 
@@ -240,6 +318,8 @@ describe("barracks training (req §7.3, §7.4)", () => {
           craftProgress: 0,
           trainTo: null,
           trainProgress: 0,
+          spawning: false,
+          spawnProgress: 0,
         },
       },
     };
@@ -262,6 +342,81 @@ describe("hay field (req §7)", () => {
 
     s = update(s, [], HAY_FIELD_BUILD_TICKS + TICKS_PER_SECOND * 20);
     expect(fieldAt(s.fields, tx, ty)?.stage).toBe("hayMature");
+  });
+});
+
+describe("Main Hall worker production (T5)", () => {
+  const mainHallId = (s: GameState) => buildingsOfKind(s, "mainHall")[0];
+  const workerCount = (s: GameState) =>
+    Object.values(s.units).filter((u) => u.kind === "worker").length;
+  // The starting hamlet runs at its 4-worker housing cap (2 Houses × 2), so add
+  // a completed House to open a slot the new worker can occupy (§7.4).
+  const SPARE_HOUSE = 8000;
+  const withSpareHousing = (s: GameState): GameState => ({
+    ...s,
+    buildings: {
+      ...s.buildings,
+      [SPARE_HOUSE]: makeBuilding(SPARE_HOUSE, "house", HAMLET_CENTER.x, HAMLET_CENTER.y + 6, { built: true }),
+    },
+  });
+
+  it("raises a new worker after WORKER_SPAWN_TICKS, for free", () => {
+    let s = withSpareHousing(createInitialState(2024));
+    const hall = mainHallId(s);
+    const before = workerCount(s);
+    const resBefore = { ...s.resources };
+
+    s = update(s, [{ type: "spawnWorker", buildingId: hall }], 1);
+    expect(s.buildings[hall].spawning).toBe(true);
+    expect(workerCount(s)).toBe(before); // not done yet
+
+    s = update(s, [], WORKER_SPAWN_TICKS);
+    expect(workerCount(s)).toBe(before + 1);
+    expect(s.buildings[hall].spawning).toBe(false);
+    expect(s.buildings[hall].spawnProgress).toBe(0);
+    // Free: no resources were spent.
+    expect(s.resources).toEqual(resBefore);
+    // The fresh worker is idle and standing somewhere walkable, not inside.
+    const fresh = Object.values(s.units).find((u) => u.kind === "worker" && u.order.type === "idle" && u.insideBuildingId === null);
+    expect(fresh).toBeTruthy();
+  });
+
+  it("refuses to start when worker housing is full (req §7.4)", () => {
+    let s = createInitialState(2024); // 4 workers at a cap of 4
+    const hall = mainHallId(s);
+    s = update(s, [{ type: "spawnWorker", buildingId: hall }], 1);
+    expect(s.buildings[hall].spawning).toBe(false);
+    expect(s.buildings[hall].spawnProgress).toBe(0);
+  });
+
+  it("a second spawnWorker is ignored while one is already in production", () => {
+    let s = withSpareHousing(createInitialState(2024));
+    const hall = mainHallId(s);
+    s = update(s, [{ type: "spawnWorker", buildingId: hall }], 5);
+    const progress = s.buildings[hall].spawnProgress;
+    // Re-issuing must not restart the timer.
+    s = update(s, [{ type: "spawnWorker", buildingId: hall }], 1);
+    expect(s.buildings[hall].spawnProgress).toBeGreaterThan(progress);
+  });
+
+  it("stalls at the cap when housing fills mid-production, then finishes once a slot frees (req §7.4)", () => {
+    let s = withSpareHousing(createInitialState(2024));
+    const hall = mainHallId(s);
+    const before = workerCount(s);
+
+    s = update(s, [{ type: "spawnWorker", buildingId: hall }], 1);
+    // Pull the spare House back out → housing full again before the timer ends.
+    s = update(s, [{ type: "demolish", buildingId: SPARE_HOUSE }], 1);
+    s = update(s, [], WORKER_SPAWN_TICKS);
+    expect(workerCount(s)).toBe(before); // stalled, no worker
+    expect(s.buildings[hall].spawning).toBe(true);
+    expect(s.buildings[hall].spawnProgress).toBe(WORKER_SPAWN_TICKS);
+
+    // Open a slot and it completes on the next step.
+    s = withSpareHousing(s);
+    s = update(s, [], 1);
+    expect(workerCount(s)).toBe(before + 1);
+    expect(s.buildings[hall].spawning).toBe(false);
   });
 });
 

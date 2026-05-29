@@ -51,6 +51,11 @@ export interface Building {
   // Barracks: who is training, into what, and how far along (§7.3).
   trainTo: TrainTarget | null;
   trainProgress: number;
+  // Main Hall: producing a new worker (T5). `spawning` true while a worker is
+  // being raised; `spawnProgress` accumulates ticks toward WORKER_SPAWN_TICKS.
+  // Only the Main Hall uses these; every other building leaves them at defaults.
+  spawning: boolean;
+  spawnProgress: number;
 }
 
 export function makeBuilding(
@@ -75,6 +80,8 @@ export function makeBuilding(
     craftProgress: 0,
     trainTo: null,
     trainProgress: 0,
+    spawning: false,
+    spawnProgress: 0,
   };
 }
 
