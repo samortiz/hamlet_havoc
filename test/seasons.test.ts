@@ -1,4 +1,4 @@
-// M4 — Seasons, time & upkeep (req §6.3, §11, §12, §15). Headless sim tests for
+// Seasons, time & upkeep (req §6.3, §11, §12, §15). Headless sim tests for
 // end-of-season upkeep + demotion, crop loss, forest regrowth, season-locked
 // farming actions, and seasonal fishing variance. Mechanics live here; the e2e
 // suite only confirms wiring.
@@ -109,9 +109,51 @@ describe("end-of-season upkeep + demotion (req §6.3)", () => {
     expect(s.resources.wheat).toBe(7); // 3 workers fed from wheat
     expect(countKind(s, "worker")).toBe(3);
   });
+
+  it("one meat feeds two workers (½-meat upkeep, §6.1/§6.2)", () => {
+    let s = createInitialState(2024);
+    // 4 workers, only meat: exactly 2 meat feeds all four (2 per meat).
+    s = { ...s, resources: { ...s.resources, wheat: 0, meat: 2 } };
+    s = update(s, [], TICKS_PER_SEASON);
+    expect(countKind(s, "worker")).toBe(4);
+    expect(s.resources.meat).toBe(0);
+  });
+
+  it("three workers consume two meat — no fractions left over (§6.2)", () => {
+    let s = createInitialState(2024);
+    const sid = workerIds(s)[0];
+    s = setKind(s, sid, "soldier"); // 3 workers + 1 soldier
+    // Meat only: 1 for the soldier, then 3 workers need ceil(3/2)=2 meat.
+    s = { ...s, resources: { ...s.resources, wheat: 0, meat: 10 } };
+    s = update(s, [], TICKS_PER_SEASON);
+    expect(countKind(s, "worker")).toBe(3);
+    expect(s.resources.meat).toBe(7); // 1 (soldier) + 2 (3 workers) consumed
+  });
+
+  it("meat and wheat combine — 1 meat + 1 wheat feeds three workers", () => {
+    let s = createInitialState(2024);
+    const sid = workerIds(s)[0];
+    s = setKind(s, sid, "soldier"); // 3 workers + 1 soldier
+    // 2 meat (1 soldier + 1 worker-meat covering 2) + 1 wheat for the third worker.
+    s = { ...s, resources: { ...s.resources, wheat: 1, meat: 2 } };
+    s = update(s, [], TICKS_PER_SEASON);
+    expect(countKind(s, "worker")).toBe(3);
+    expect(s.resources.meat).toBe(0);
+    expect(s.resources.wheat).toBe(0);
+  });
+
+  it("Mild Winter waives worker upkeep — workers survive with no food (§16.3)", () => {
+    let s = createInitialState(2024);
+    s = { ...s, resources: { ...s.resources, wheat: 0, meat: 0 } };
+    s = { ...s, eventMods: { ...s.eventMods, mildWinter: true } };
+    s = update(s, [], TICKS_PER_SEASON);
+    expect(countKind(s, "worker")).toBe(4); // none starved
+    expect(s.resources.wheat).toBe(0);
+    expect(s.resources.meat).toBe(0);
+  });
 });
 
-describe("upkeep notifications (T7)", () => {
+describe("upkeep notifications", () => {
   it("emits a death notification when a worker starves", () => {
     let s = createInitialState(2024);
     s = { ...s, resources: { ...s.resources, wheat: 0, meat: 0 } }; // no food

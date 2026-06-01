@@ -23,12 +23,11 @@ import {
 import { buildingAt, isBuilt, type Building } from "../game/buildings.js";
 import type { Enemy } from "../game/combat.js";
 import type { BuildableKind, Command } from "../game/commands.js";
-import type { Inventory } from "../game/resources.js";
 import { fieldAt } from "../game/fields.js";
 import { fieldActionInSeason, seasonAt } from "../game/season.js";
 import type { ResourcePool, ResourceType } from "../game/resources.js";
 import { hexToPixel } from "../game/hex.js";
-import { HAMLET_CENTER, inBounds, tileAt } from "../game/map.js";
+import { HAMLET_CENTER, inBounds, tileAt, type TileCoord } from "../game/map.js";
 import type { GameState } from "../game/state.js";
 import type { FieldAction, UnitKind } from "../game/units.js";
 import {
@@ -62,7 +61,7 @@ const PAN_KEYS: Record<string, readonly [number, number]> = {
   KeyS: [0, 1],
 };
 
-// Digit → buildable kind (req §7.1, M3 input). Digit 1 = House, ... 6 = Hay.
+// Digit → buildable kind (req §7.1). Digit 1 = House, ... 6 = Hay.
 const PLACEMENT_KEYS: Record<string, BuildableKind> = {
   Digit1: "house",
   Digit2: "barn",
@@ -76,6 +75,7 @@ export interface Controls {
   update: (dtSec: number) => void; // advance camera from WASD pan
   getView: () => View;
   setViewport: (w: number, h: number) => void;
+  centerOn: (tile: TileCoord) => void; // jump the camera to a tile (enemy notices)
 }
 
 export function createControls(opts: {
@@ -93,7 +93,7 @@ export function createControls(opts: {
   let selection: number[] = [];
   let selectedBuilding: number | null = null;
   // Tracks the selected Main Hall's worker-production flag so the panel can
-  // rebuild when it flips (start / completion) without polling every frame (T5).
+  // rebuild when it flips (start / completion) without polling every frame.
   let lastSpawning = false;
   let placementKind: BuildableKind | null = null;
   // Pending field action (plough/plant/harvest). Works like building placement:
@@ -247,11 +247,6 @@ export function createControls(opts: {
         unitSection.append(equipButton("sword"), equipButton("shield"));
       }
 
-      // Town actions (req §9, §18): travel to the marketplace to trade.
-      unitSection.append(
-        apButton("Sell at Town", () => { sellRunAtTown([...selection]); }),
-        apButton("Buy Horse", () => { buyHorseRun([...selection]); }),
-      );
       actionPanel.append(unitSection);
     }
 
@@ -271,7 +266,7 @@ export function createControls(opts: {
           );
         }
 
-        // Main Hall: raise a new worker for free (T5). Disabled while one is
+        // Main Hall: raise a new worker for free. Disabled while one is
         // already in production or when worker housing is full (§7.4).
         if (b.kind === "mainHall" && isBuilt(b)) {
           const st = getState();
@@ -416,38 +411,6 @@ export function createControls(opts: {
     return null;
   }
 
-  // Copy a unit's carried resources into a fresh sell list (req §18). Trades
-  // are issued per-unit so each sells exactly what it is carrying.
-  function carriedSellList(carrying: Inventory): Inventory {
-    const out: Inventory = {};
-    for (const k of Object.keys(carrying) as (keyof Inventory)[]) {
-      const v = carrying[k] ?? 0;
-      if (v > 0) out[k] = v;
-    }
-    return out;
-  }
-
-  // Send each selected unit to town to sell whatever it carries (req §18).
-  function sellRunAtTown(ids: number[]): void {
-    const s = getState();
-    for (const id of ids) {
-      const u = s.units[id];
-      if (!u) continue;
-      enqueue({ type: "trade", unitIds: [id], sell: carriedSellList(u.carrying), buy: {}, buyHorse: false });
-    }
-  }
-
-  // Send each selected unit to town to buy a horse, funding it by selling its
-  // carried goods (req §9, §18). A unit already mounted is skipped by the sim.
-  function buyHorseRun(ids: number[]): void {
-    const s = getState();
-    for (const id of ids) {
-      const u = s.units[id];
-      if (!u) continue;
-      enqueue({ type: "trade", unitIds: [id], sell: carriedSellList(u.carrying), buy: {}, buyHorse: true });
-    }
-  }
-
   function boxSelect(): void {
     const x0 = Math.min(drag.startX, drag.curX) + camera.x;
     const y0 = Math.min(drag.startY, drag.curY) + camera.y;
@@ -525,7 +488,7 @@ export function createControls(opts: {
     mouse.inside = true;
     hoveredUnitId = unitAtScreen(p.x, p.y);
     // A hovered unit takes precedence; otherwise surface the building under the
-    // cursor for its tooltip (T10).
+    // cursor for its tooltip.
     if (hoveredUnitId === null) {
       const tile = screenToHex(camera, p.x, p.y);
       const b = buildingAt(getState().buildings, tile.x, tile.y);
@@ -690,7 +653,7 @@ export function createControls(opts: {
     refreshBuildButtons();
 
     // Rebuild the panel when a selected Main Hall starts/finishes raising a
-    // worker, so the Create Worker button reflects the live state (T5).
+    // worker, so the Create Worker button reflects the live state.
     if (selectedBuilding !== null) {
       const sel = getState().buildings[selectedBuilding];
       const spawning = sel?.kind === "mainHall" && sel.spawning;
@@ -766,5 +729,11 @@ export function createControls(opts: {
     camera = clampCamera(camera, viewW, viewH);
   }
 
-  return { update, getView, setViewport };
+  // Recenter the camera on a tile (clicking an enemy-sighting notice jumps
+  // the player to the combat).
+  function centerOn(tile: TileCoord): void {
+    camera = centerOnTile(tile, viewW, viewH);
+  }
+
+  return { update, getView, setViewport, centerOn };
 }

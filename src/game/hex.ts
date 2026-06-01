@@ -48,10 +48,16 @@ const NEIGHBOR_DELTAS: ReadonlyArray<ReadonlyArray<readonly [number, number]>> =
 ];
 
 export function hexNeighbors(x: number, y: number): TileCoord[] {
-  const deltas = NEIGHBOR_DELTAS[((y % 2) + 2) % 2];
+  // Adjacency is defined on whole hexes. A fractional coord (e.g. a unit or
+  // enemy caught mid-move) would make `cy % 2` non-integer and index
+  // NEIGHBOR_DELTAS out of bounds → a crash on `deltas[i][0]`. Snap to the
+  // containing hex so this single source of grid geometry never throws.
+  const cx = Math.round(x);
+  const cy = Math.round(y);
+  const deltas = NEIGHBOR_DELTAS[((cy % 2) + 2) % 2];
   const out: TileCoord[] = new Array(6);
   for (let i = 0; i < 6; i++) {
-    out[i] = { x: x + deltas[i][0], y: y + deltas[i][1] };
+    out[i] = { x: cx + deltas[i][0], y: cy + deltas[i][1] };
   }
   return out;
 }

@@ -10,10 +10,11 @@ import { createInitialState } from "./game/state.js";
 import { update } from "./game/update.js";
 import { createRenderer } from "./render/renderer.js";
 import type { View } from "./ui/camera.js";
-import { createControls } from "./ui/controls.js";
+import { createControls, type Controls } from "./ui/controls.js";
 import { createHud, type Hud } from "./ui/hud.js";
 import { createTownPanel } from "./ui/town.js";
 import { createHallPanel } from "./ui/hall.js";
+import { createEventOverlay } from "./ui/events.js";
 import type { GameState } from "./game/state.js";
 
 const STEP_MS = 1000 / TICKS_PER_SECOND;
@@ -89,10 +90,19 @@ function main(): void {
     hud.flash("New game");
   }
 
+  // `controls` is created below but referenced by the HUD's jump callback; the
+  // closures run only after both exist, so the forward reference is safe.
+  let controls: Controls;
   const hud: Hud = createHud({
     onNew: newGame,
     onSave: () => saveGame(false),
     onLoad: loadGame,
+    // an enemy sighting pauses; clicking its toast jumps there and resumes.
+    onPause: () => (paused = true),
+    onJumpTo: (x, y) => {
+      controls.centerOn({ x, y });
+      paused = false;
+    },
   });
 
   // Resume the last session if a valid save exists (req §2.5).
@@ -109,7 +119,7 @@ function main(): void {
   const actionPanelEl = document.getElementById("action-panel");
   if (!(actionPanelEl instanceof HTMLElement)) throw new Error("#action-panel not found");
 
-  const controls = createControls({
+  controls = createControls({
     canvas,
     getState: () => state,
     enqueue: (cmd) => commandQueue.push(cmd),
@@ -133,6 +143,18 @@ function main(): void {
     enqueue: (cmd) => commandQueue.push(cmd),
   });
 
+  const eventOverlayEl = document.getElementById("event-overlay");
+  const eventDialogEl = document.getElementById("event-dialog");
+  if (!(eventOverlayEl instanceof HTMLElement) || !(eventDialogEl instanceof HTMLElement)) {
+    throw new Error("#event-overlay / #event-dialog not found");
+  }
+  const eventOverlay = createEventOverlay({
+    overlay: eventOverlayEl,
+    dialog: eventDialogEl,
+    enqueue: (cmd) => commandQueue.push(cmd),
+    onRestart: newGame,
+  });
+
   function syncViewport(): void {
     renderer.resize();
     const rect = canvas.getBoundingClientRect();
@@ -150,11 +172,21 @@ function main(): void {
 
     controls.update(frameMs / 1000);
 
-    if (!paused) {
+    // The sim steps through normal play and the live attack-wave fight, but not
+    // when paused or once the game is over (req §21.1). A Tax/Misc EndOfYearEvent
+    // keeps stepping — update() pauses the whole world internally while the modal
+    // is open, but still processes the tax/acknowledge commands sent from it.
+    if (!paused && state.phase !== "gameOver") {
       accumulatorMs += frameMs;
       while (accumulatorMs >= STEP_MS) {
         const commands = commandQueue.splice(0, commandQueue.length);
         state = update(state, commands, 1);
+        // Hand this step's combat hits to the renderer as floating "-N" toasts
+        //. Drained per step so events from intermediate steps in a multi-
+        // step frame aren't lost before the next render.
+        for (const d of state.damageEvents) renderer.addDamage(d.x, d.y, d.amount, d.target);
+        // Heal toasts: green "+N" over each unit that regenerated/season-healed.
+        for (const h of state.healEvents) renderer.addHeal(h.x, h.y, h.amount);
         accumulatorMs -= STEP_MS;
       }
       if (state.tickCount - lastAutosaveTick >= AUTOSAVE_TICKS) saveGame(true);
@@ -165,6 +197,7 @@ function main(): void {
     hud.update(state, paused, view);
     townPanel.update(state);
     hallPanel.update(state, view);
+    eventOverlay.update(state);
     requestAnimationFrame(frame);
   }
 

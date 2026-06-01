@@ -2,12 +2,12 @@
 // no diagonal-cost asymmetry, no corner-cutting check (neither exists on a
 // hex grid). Deterministic: ties broken by insertion order so a given
 // (map, start, goal) always yields the same path. Pure — depends only on the
-// map's current walkability, which lets later milestones re-path when terrain
+// map's current walkability, which lets callers re-path when terrain
 // or buildings change.
 
 import type { Building } from "./buildings.js";
 import { hexDistance, hexNeighbors } from "./hex.js";
-import { isWalkable, type GameMap, type TileCoord } from "./map.js";
+import { inBounds, isWalkable, tileAt, type GameMap, type TileCoord } from "./map.js";
 
 interface HeapItem {
   idx: number;
@@ -58,18 +58,21 @@ class MinHeap {
   }
 }
 
-// Returns the tiles from the first step through the goal (excluding the start),
-// [] if already at the goal, or null if the goal is unwalkable/unreachable.
-export function findPath(
+// Core A* parameterised by a `passable(x, y)` predicate, so the same search
+// drives both land movement (walkable tiles) and water-predator movement
+// (water-only tiles). Returns the tiles from the first step through the goal
+// (excluding the start), [] if already at the goal, or null if the goal is
+// impassable/unreachable.
+function aStar(
   map: GameMap,
   start: TileCoord,
   goal: TileCoord,
-  buildings?: Record<number, Building>,
+  passable: (x: number, y: number) => boolean,
 ): TileCoord[] | null {
-  // The goal must be reachable, but the start need not be walkable — a unit can
+  // The goal must be reachable, but the start need not be passable — a unit can
   // always step off the tile it stands on (e.g. a mountain whose Mine was just
   // demolished), so we only gate on the goal here and on neighbours below.
-  if (!isWalkable(map, goal.x, goal.y, buildings)) return null;
+  if (!passable(goal.x, goal.y)) return null;
   if (start.x === goal.x && start.y === goal.y) return [];
 
   const W = map.width;
@@ -95,7 +98,7 @@ export function findPath(
     const cg = g.get(cur.idx) as number;
 
     for (const n of hexNeighbors(cx, cy)) {
-      if (!isWalkable(map, n.x, n.y, buildings)) continue;
+      if (!passable(n.x, n.y)) continue;
       const nIdx = n.y * W + n.x;
       if (closed.has(nIdx)) continue;
       const ng = cg + 1; // uniform cost on a hex grid
@@ -121,4 +124,26 @@ export function findPath(
   }
   path.reverse();
   return path;
+}
+
+// Land movement: A* over walkable tiles (req §6.5). Walkability depends on the
+// current buildings (a built Mine opens its mountain), so callers pass them.
+export function findPath(
+  map: GameMap,
+  start: TileCoord,
+  goal: TileCoord,
+  buildings?: Record<number, Building>,
+): TileCoord[] | null {
+  return aStar(map, start, goal, (x, y) => isWalkable(map, x, y, buildings));
+}
+
+// Water-predator movement: A* restricted to water tiles (req §14). Sea serpents
+// and krakens hunt within the water and never step onto land, so the only
+// passable tiles are water.
+export function findWaterPath(
+  map: GameMap,
+  start: TileCoord,
+  goal: TileCoord,
+): TileCoord[] | null {
+  return aStar(map, start, goal, (x, y) => inBounds(map, x, y) && tileAt(map, x, y) === "water");
 }

@@ -1,4 +1,4 @@
-// T9 — Hall/storage load-unload interface. Headless sim tests for moving goods
+// Hall/storage load-unload interface. Headless sim tests for moving goods
 // between a unit's inventory and the hamlet's shared resource pool via a built
 // storage building the unit stands on or beside.
 
@@ -24,7 +24,7 @@ function setUnit(s: GameState, id: number, patch: Partial<Unit>): GameState {
   return { ...s, units: { ...s.units, [id]: { ...s.units[id], ...patch } } };
 }
 
-describe("hall interface — unloading (T9)", () => {
+describe("hall interface — unloading", () => {
   it("stores a worker's goods into the hamlet pool when standing on the hall", () => {
     let s = createInitialState(2024);
     const id = firstUnitId(s);
@@ -54,7 +54,7 @@ describe("hall interface — unloading (T9)", () => {
     const hall = mainHallId(s);
     const cap = storageCapacity(s.buildings);
     // Fill the pool to one short of capacity, then try to unload 5 wood.
-    s = { ...s, resources: { ...s.resources, hay: cap - 1, wheat: 0 } };
+    s = { ...s, resources: { ...s.resources, wheat: cap - 1 } };
     s = setUnit(s, id, { x: HAMLET_CENTER.x, y: HAMLET_CENTER.y, carrying: { wood: 5 } });
     s = update(s, [{ type: "hallStore", unitId: id, buildingId: hall, resource: "wood", amount: 5, toStorage: true }], 1);
 
@@ -63,7 +63,7 @@ describe("hall interface — unloading (T9)", () => {
   });
 });
 
-describe("hall interface — loading (T9)", () => {
+describe("hall interface — loading", () => {
   it("loads goods from the pool onto a worker, clamped to carry capacity", () => {
     let s = createInitialState(2024);
     const id = firstUnitId(s);
@@ -90,7 +90,7 @@ describe("hall interface — loading (T9)", () => {
   });
 });
 
-describe("hall interface — guards (T9)", () => {
+describe("hall interface — guards", () => {
   it("ignores transfers when the unit is not on or beside the building", () => {
     let s = createInitialState(2024);
     const id = firstUnitId(s);

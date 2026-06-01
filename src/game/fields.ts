@@ -4,11 +4,11 @@
 //
 // Wheat-field stages (req §11): ploughed -> planted -> grown -> (harvested
 // back to ploughed for replanting). Plough is a worker action; the field
-// appears the moment ploughing completes (M2).
+// appears the moment ploughing completes.
 //
 // Hay-field stages (req §7, §12+): underConstruction -> mature. Construction
 // takes HAY_FIELD_BUILD_TICKS and costs HAY_FIELD_COST; once mature it yields
-// hay continuously (production rate lands in M4 alongside the season cycle).
+// hay continuously alongside the season cycle.
 
 import { FIELD_HP } from "../config/index.js";
 

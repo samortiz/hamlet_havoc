@@ -88,7 +88,7 @@ Two layers, matching the sim/render split:
 ### 3.2 Graphics
 - Sprite-based 2D graphics for all units, buildings, and terrain tiles.
 - **Placeholder, hand-drawn-style graphics for v1** — final art assets are not provided.
-- Tiles are pointy-top hexes with circumradius `HEX_SIZE = 20` px (per-hex footprint ≈ 35 wide × 40 tall).
+- Tiles are pointy-top hexes with circumradius `HEX_SIZE = 40` px (per-hex footprint ≈ 70 wide × 80 tall), sized so the Kenney hexagon sprites downscale crisply.
 - Each unit has at least: an idle sprite and an action sprite (working/fighting).
 - **v1 uses static sprites** — unit movement is position change only; frame-based animation is deferred to a future update.
 
@@ -118,6 +118,7 @@ Two layers, matching the sim/render split:
 - The starting hamlet must spawn on contiguous grass tiles large enough to fit the initial buildings plus open space.
 - The map should contain a minimum of each terrain type (e.g., ≥10% forest, ≥5% water, ≥5% mountain).
 - Resources should be distributed so the player has reasonable access to all gathering activities from the starting position.
+- There should always be a path from the center of every edge to the main hall, and also from the town to the main hall. 
 
 ### 4.4 Camera / Viewport
 - Camera scrolls if the map exceeds the visible area. Camera control is **keyboard panning (arrow keys / WASD) and mouse edge-scroll only** — clicking and dragging are reserved exclusively for selecting/commanding units and interacting with menus.
@@ -130,7 +131,7 @@ A new game initializes with:
 - 1 Main Hall (provides central storage and acts as drop-off point)
 - 2 Worker Houses (housing 4 workers total)
 - 4 Workers
-- 4 Wheat (in storage)
+- 12 Wheat (in storage)
 - Procedurally generated surrounding terrain
 - Season: Spring, Year 1, Day 1
 
@@ -139,19 +140,31 @@ A new game initializes with:
 ## 6. Units
 
 ### 6.1 Stats Table
-| Unit        | Attack | Defense | HP | Carry Cap | Upkeep / season | Notes                                                       |
-|-------------|--------|---------|----|-----------|-----------------|-------------------------------------------------------------|
-| Worker      | 0–2    | 0       | 2  | 5         | 1 food          | Plant, harvest wood, fish, mine, build                      |
-| Soldier     | 1–3    | 0       | 4  | 5         | 1 meat          | Fish, mine; **cannot** plant or chop wood                   |
-| Captain     | 1–5    | 1       | 6  | 2†        | 1 gold          | Carries only equipment (sword/shield); no resources         |
-| Goblin      | 0–3    | 0       | 3  | —         | —               | Enemy; drops Iron, occasionally Gold                        |
-| Sea Serpent | 0–2    | 0       | 3  | —         | —               | Enemy; drops Meat, occasionally Gold                        |
-| Kraken      | 1–3    | 1       | 5  | —         | —               | Enemy; drops Meat/Gold, rarely Diamond                      |
+| Unit         | Attack  | Defense | HP | Carry Cap | Upkeep / season      | Notes                                                       |
+|--------------|---------|---------|----|-----------|-----------------|-------------------------------------------------------------|
+| Worker       | 1D6     | 0       | 10 | 5         | 1 wheat or 1/2 meat | Plant, harvest wood, fish, mine, build,                      |
+| Soldier      | 2D6     | 2       | 20 | 5         | 1 meat               | Fish, mine; **cannot** plant or gather wood                 |
+| Captain      | 2D8 + 5 | 1D4 + 1 | 40 | 5         | 1 gold               | Carries only sword, shield, gold and diamonds; no other resources         |
+
+Enemies 
+|  Enemy Name  | Attack   | Defense | HP | Terrain | Loot (drops)
+| Giant Spider | 1D4      | 0       | 5  | Land    | 60% 1 Meat, 40% 2 Meat
+| Goblin       | 1D4      | 0       | 10 | Land    | 60% 1 Iron,  30% 2 Iron,  10% 1 Gold
+| Goblin Chief | 1D12     | 2       | 18 | Land    | 40% 1 Gold, 40% 2 Gold, 20% 3 Gold 
+| Sea Serpent  | 1D4      | 0       | 8  | Water   | 80% 1 Meat, 20% 2 Meat
+| Kraken       | 1D12     | 2       | 20 | Water   | 60% 1 Gold, 30% 2 Gold, 10% 1 Diamond
+| Dragon       | 2D12 + 3 | 1D6     | 50 | Land    | 60% 4 Gold, 30% 2 Gold + 1 Diamond, 10% 2 Diamonds
 
 ### 6.2 Attack Notes
-- Attack is expressed as a range with minimum and maximum damage (e.g., 0–2 means damage rolls between 0 and 2 inclusive per attack).
-- "Food" for a worker means any food resource (wheat or meat) — they are interchangeable.
+- Attack and defence are expressed as a dice roll eg. 2D6+3 means two six sided dice rolled plus a constant 3, equivalent to (random(1-6) + random(1-6) + 3)
+- Defense is subtracted from the damage applied to the unit. 
+- For worker upkeep, two workers can be fed with one meat, but if there are three workers, then they will consume two meat.  No fractions of meat are left. 
 - Defense reduces incoming damage by the defense value
+- Injured units will heal at a rate of 5% per 5 seconds when standing idle. If the unit is not idle, but is moving, gathering resource etc, then it will not heal. 
+  When a season changes the unit gets a bonus heal of 25% immediately even if not idle.
+  When an injured unit heals, show a toast with +X, similar to the damage toast except green. 
+- When an enemy is killed the resources dropped can be picked up by the killing unit, or if the unit cannot carry them they are left on the ground and picked up by a unit walking over them.  
+  If the enemy is in the water the resources are dropped where the attacker is standing. 
 
 ### 6.3 Upkeep
 - Upkeep is consumed at the **end of each season**.
@@ -162,10 +175,8 @@ A new game initializes with:
 - Only Workers are permanently lost to unpaid upkeep; higher tiers fall back one rank.
 
 ### 6.4 Equipment
-- Captains, Soldiers and Workers can equip:
-  - **Sword**: +1 Attack
-  - **Shield**: +1 Defense
-- A unit may equip at most **one sword and one shield**.
+- Captains, Soldiers and Workers can equip: sword and shield. 
+  A unit may equip at most **one sword and one shield**.
 - Equipping is handled via UI. **Each equipped sword or shield occupies one carry slot** (counts as one carried item): for a Worker or Soldier (carry cap 5), equipping both leaves 3 slots for resources.
 - **†** Captains carry no resources, but have a dedicated 2-slot capacity used only for equipment (one sword + one shield). 
 
@@ -183,16 +194,15 @@ A new game initializes with:
 
 | Building       | Cost                       | HP  | Build Time | Storage | Effect                              |
 |----------------|----------------------------|-----|------------|---------|-------------------------------------|
-| Main Hall      | (pre-built; not buildable) | 100 | N/A        | 20      | Central resource drop-off           |
-| House          | 3 Wood + 2 Wheat           | 50  | 20 sec     | 10      | Houses 2 workers                    |
-| Barn           | 5 Wood                     | 60  | 30 sec     | 50      | Additional storage                  |
-| Smithy         | 3 Stone + 3 Wood           | 80  | 60 sec     | —       | Crafts weapons and armor            |
-| Barracks       | 3 Stone + 4 Wood + 2 Iron  | 80  | 60 sec     | —       | Trains & houses soldiers/captains   |
+| Main Hall      | (pre-built; not buildable) | 100 | N/A        | 20      | Central drop-off; raises free workers (§7.5) |
+| House          | 3 Wood + 2 Wheat           | 50  | 15 sec     | 10      | Houses 2 workers                    |
+| Barn           | 5 Wood                     | 60  | 15 sec     | 50      | Additional storage                  |
+| Smithy         | 3 Stone + 3 Wood           | 80  | 30 sec     | —       | Crafts weapons and armor            |
+| Barracks       | 3 Stone + 4 Wood + 2 Iron  | 80  | 30 sec     | —       | Trains & houses soldiers/captains   |
 | Mine           | 4 Wood                     | 50  | 30 sec     | —       | Required to mine a mountain tile    |
-| Ploughed Field | — (1 Wheat to plant)       | 5   | 20 sec     | —       | Tile feature; can be planted        |
-| Hay Field      | 2 Wood (fencing)           | 5   | 30 sec     | —       | Tile feature; produces hay          |
+| Ploughed Field | — (1 Wheat to plant)       | 5   | 10 sec     | —       | Tile feature; can be planted        |
+| Hay Field      | 3 Wood (fencing)           | 5   | 10 sec     | —       | Tile feature; stables horses (§9)   |
 
-> Building HP values fall in the 50–100 range per the design decision; the specific per-building numbers above are a proposal and may be tuned during balancing (see §26). Ploughed/hay fields are flimsy tile features, not structures, so they keep low HP.
 
 ### 7.1 Building Rules
 - All buildings except the Mine and Farm must be placed on grass.
@@ -206,14 +216,15 @@ A new game initializes with:
 - **Demolish:** The player can demolish any building to reclaim the space; demolished buildings do not refund their cost.
 - **No maximum** number of any building type.
 - Any worker can operate any building (smithy, barracks, mine) by stepping inside — buildings do not require a permanently assigned worker.
+- **Load/unload at storage buildings:** with a non-captain unit on or beside a *built storage building* (Main Hall, Barn, House), the player can open a load/unload panel to move resources freely between the unit's inventory and the hamlet's shared pool — load up a worker for a town run, or unload a returning one. Transfers respect the pool's storage cap (loading the unit) and the unit's carry room (loading the pool). This is the hamlet-side analogue of the town interface (§18).
 
 ### 7.2 Smithy Items
-| Item    | Cost            | Effect    |
-|---------|-----------------|-----------|
-| Sword   | 2 Iron          | +1 Attack |
-| Shield  | 2 Iron + 2 Wood | +1 Defense|
+| Item    | Cost            | Effect          |  Build Time  |
+|---------|-----------------|-----------------| ------------ |
+| Sword   | 3 Iron          | +1D6 to Attack  |  20 sec      |
+| Shield  | 2 Iron + 2 Wood | +1D4 to Defense |  30 sec      |
 
-- Any worker stationed inside the smithy produces items; **each item takes 1 season** to craft.
+- Any worker stationed inside the smithy produces items
 
 ### 7.3 Barracks Training
 - Worker → Soldier: 1 season
@@ -227,18 +238,22 @@ A new game initializes with:
 - Training moves a unit between categories and therefore between housing pools: a Worker → Soldier frees a House slot and consumes a Barracks slot. Training cannot start unless a free destination slot exists.
 - The HUD population display shows current count vs. capacity per category.
 
+### 7.5 Main Hall Worker Production
+- The Main Hall can raise a fresh worker for free over a production time of 20 sec (tunable §26) — no resource cost, just time.
+- Production is **gated by worker housing** (§7.4): it can only start if there is a free House slot, and if housing fills mid-production it stalls (smithy-style) until a slot opens, then completes.
+- On completion the new worker appears on a free tile adjacent to the Main Hall. A progress bar is drawn under the hall while it works.
+
 ---
 
 ## 8. Resources
 
 | Resource | Value | Use                                                    |
 |----------|-------|--------------------------------------------------------|
-| Hay      | 1     | Food for horses                                        |
 | Wheat    | 2     | Food for workers; also seed for planting               |
 | Wood     | 3     | Building construction                                  |
-| Stone    | 4     | Building construction                                  |
-| Meat     | 5     | Food for workers, soldiers, captains                   |
-| Iron     | 5     | Weapons, armor, barracks construction                  |
+| Stone    | 3     | Building construction                                  |
+| Meat     | 4     | Food for workers, soldiers, captains                   |
+| Iron     | 4     | Weapons, armor, barracks construction                  |
 | Gold     | 10    | Town purchases, captain pay, taxes                     |
 | Diamond  | 50    | Same uses as gold (50× value)                          |
 
@@ -251,9 +266,9 @@ A new game initializes with:
 ## 9. Horses
 
 - Purchased in town for resources with a value of 20.  So 4 meat, or 10 wheat could buy a horse.
-- Effect: +3 HP to the unit.  When the first 3 HP are lost on the unit the horse dies.
+- Effect: +10 HP to the unit.  When the first 10 HP are lost on the unit the horse dies.
 - Horses double travel speed and allow carrying an extra 5 resources.
-- Upkeep: 2 hay OR 2 wheat per season.
+- horses require that there be a hay field available.  Each hay field can support 2 horses (tunable constant).  A horse cannot be purchased if there is not enough available hay field to support it. 
 - Any unit type can use a horse.
 
 ---
@@ -263,11 +278,11 @@ A new game initializes with:
 ### 10.1 Action Table
 | Action       | Unit(s)            | Season  | Duration   | Notes                                        |
 |--------------|--------------------|---------|------------|----------------------------------------------|
-| Plough Field | Worker             | Any     | 20 sec     | Result: ploughed tile ready to plant         |
-| Plant Field  | Worker             | Spring  | 20 sec     | Requires 1 wheat per tile as seed            |
-| Harvest      | Worker             | Fall    | 20 sec     | Yields 4 wheat per tile                      |
+| Plough Field | Worker             | Any     | 10 sec     | Result: ploughed tile ready to plant         |
+| Plant Field  | Worker             | Spring  | 10 sec     | Requires 1 wheat per tile as seed            |
+| Harvest      | Worker             | Fall    | 10 sec     | Yields a random 10–20 wheat per tile         |
 | Collect Wood | Worker             | Any     | 1 Wood / 5 sec |  |
-| Fishing      | Worker / Soldier   | Any     | 1 Meat / 5 sec | Seasonal variance lands in M4 (faster in summer, slower in winter) |
+| Fishing      | Worker / Soldier   | Any     | base 1 Meat / 5 sec | Seasonal variance (faster in summer ≈ 1/3 sec, slower in winter ≈ 1/10 sec) |
 | Building     | Worker             | Any     | varies   | varies by building |
 | Mining       | Worker / Soldier   | Any     | 1 yield / 5 sec | Yields stone/iron/gold; small diamond chance from gold mines |
 
@@ -280,55 +295,63 @@ A new game initializes with:
 
 ## 11. Farming Lifecycle
 
-1. **Plough** a grass tile (20 sec, any season).
-2. **Plant** the ploughed tile (20 sec, spring only, consumes 1 wheat as seed).
-3. **Grow** through summer (automatic).
-4. **Harvest** in fall (20 sec; yields 4 wheat per tile).
-5. If not harvested before fall ends, the crop is lost.
+1. **Plough** a grass tile.
+2. **Plant** the ploughed tile (consumes 1 wheat as seed).
+3. **Grow** through summer (automatic). The field's colour changes from a pale sprout-green when freshly planted to deep green when ripe, so growth is visible at a glance.
+4. **Harvest** in fall, yields a random 10–20 wheat per tile
+5. If not harvested before fall ends, the crop is lost. 
 6. Ploughed but unplanted tiles persist into the next season.
+7. A worker left **idle standing on a ploughed field** tends it hands-free: it plants a ploughed field in spring (when seed wheat is on hand) and harvests a ripe one in fall, without an explicit order.
 
-> **Hay fields** are separate from the wheat lifecycle: they are designated on grass for a wood fencing cost, do not need ploughing or annual replanting, and produce hay continuously.
+> **Hay fields** are separate from the wheat lifecycle: they are designated on grass for a wood fencing cost and do not need ploughing or annual replanting. They produce no resource — each mature hay field simply provides stabling capacity for 2 horses (§9). Hay is not a stored or tradeable resource.
 
 ---
 
 ## 12. Wood Gathering
 
 - Worker stands on or adjacent to a forest tile and chops.
-- Yields wood gradually (1 wood per 5 seconds).
+- Yields wood gradually with a progress bar (speed is tunable see 10.1).
 - Worker carries up to 5 wood, then must walk to storage.
-- Forest tiles deplete after 5 wood is harvested and become stumps; the tile is then bare grass and buildable.
-- Regrowth: Forest stumps will regrow at the start of spring.
+- Forest tiles deplete after 1D6 + 2 wood is harvested and become stumps.  
+- Regrowth: Forest stumps will regrow at the start of spring. Each time a stump regrows a new amount of wood is randomly determined for the tile. 
 
 ---
 
 ## 13. Mining
 
 ### 13.1 Setup
-- Worker builds a mine on a mountain tile (4 wood, 30 sec). The mountain is impassable while bare, so the worker builds it from an adjacent tile; the mountain becomes walkable once the mine is complete (see §4.2). Mountains whose every neighbour is also impassable cannot host a mine.
-- On completion, the mine is randomly assigned a type:
-  - Stone (most common — e.g., 50%)
-  - Iron (less common — e.g., 40%)
-  - Gold (rare — e.g., 10%)
-- Mines can be destroyed, losing resources spent creating it, but they can be rebuilt and randomly assigned a new type.
+- Worker builds a mine on a mountain tile.  The mountain is impassable while bare, so the worker builds it from an adjacent tile; the mountain becomes walkable once the mine is complete (see §4.2). Mountains whose every neighbour is also impassable cannot host a mine.
+- **Every mountain tile has a rock type** (stone / iron / gold), rolled at map-gen with weights Stone 60% / Iron 30% / Gold 10%. A small rock-type dot near the peak hints at what a mine there is likely to yield.
+- On completion, the mine is randomly assigned a yield type, **biased by the host mountain's rock type** (each row sums to 1.0):
+  | Mountain rock | Stone mine | Iron mine | Gold mine |
+  |---------------|-----------|-----------|-----------|
+  | Stone         | 80%       | 15%       | 5%        |
+  | Iron          | 40%       | 50%       | 10%       |
+  | Gold          | 40%       | 20%       | 40%       |
+- Mines can be destroyed, losing resources spent creating it, but they can be rebuilt — the mountain's rock type is fixed, so a rebuild re-rolls the yield against the same biased row.
 
 ### 13.2 Operation
-- A worker (or soldier) inside the mine produces ore over time (1 yield / 5 sec).
+- A worker (or soldier) inside the mine produces ore over time. 
 - Carry limit applies; worker returns to storage when full.
-- Iron and gold mines attract goblin attacks: for each mining interval there is a **15% chance** of a goblin spawning near the mine. (Spawn cadence is tied to the mining-yield interval; M5/M6 may tune this independently.)
-- Gold mines have a 10% chance to produce a diamond instead of gold per yield.
+- Iron mines attract goblin attacks: for each mining yield there is a **15% chance** of a goblin (tunable) spawning near the mine and attacking nearby units (§17.3). 
+- Gold mines attract goblin attacks: for each mining yield there is a **15% chance** of 2 goblins (tunable) spawning near the mine and attacking nearby units.  
+- Gold mines have a 10% chance to produce a diamond instead of gold per yield.  When a diamond is produced there is always a 2 goblin attack (tunable) immediately after aquiring the diamond.
 
 ### 13.3 Mine Exhaustion
 - Mines do not exhaust, but can only be occupied by one worker at a time.
+- Soliders or other units standing beside the mine can be used for defense against goblin attacks.  
 
 ---
 
 ## 14. Fishing
 
 - Worker or soldier on a tile adjacent to water can fish.
-- Current tuned base rate: **1 Meat / 5 sec** in all seasons. Seasonal variance (faster in summer, slower in winter) lands in M4 alongside the rest of the season-locked rules.
+- Base rate see table in section 10.1
 - Yields meat as a resource.
 - Carry limit applies.
-
+- Fishing draws **sea-serpent / kraken** attacks: each fishing yield has a 15% chance of a sea serpent attack.  Each fishing yield has a 7% chance of a kraken attack.  
+  The enemies will spawn on an adjacent water tile and attack any units on adjacent tiles. 
+- Water predators should actively hunt anyone standing beside, or fishing in water it can swim to and reach. If it can find a path without leaving the water to a water tile adjacent to a player it should move and attack them.
 ---
 
 ## 15. Seasons and Year Cycle
@@ -341,44 +364,92 @@ Spring → Summer → Fall → Winter → (Year++; end-of-year event) → Spring
 - A visible season indicator and timer in the HUD shows current season and time remaining.
 
 ### 15.3 Seasonal Activity Rules
-- **Spring**: Planting allowed. Standard rates otherwise.
-- **Summer**: Fishing bonus.
+- **Spring**: Planting allowed. Forest stumps regrow. Standard rates otherwise.
+- **Summer**: Fishing bonus - faster fishing 
 - **Fall**: Harvesting allowed. Wheat must be harvested before winter or it is lost.
-- **Winter**: Reduced fishing. Crops cannot be planted or harvested.
+- **Winter**: Reduced fishing Crops cannot be planted or harvested. Water predators persist one year from their spawn date and despawn on schedule (see §17.3), not at the fall→winter boundary.
 
 ---
 
 ## 16. End-of-Year Events
 
-At the end of winter (year transition), a special event triggers. The upcoming event is announced at the start of that year (displayed in the HUD), so the player can prepare.
+At the end of winter (year transition), a special event triggers. The upcoming event type is **announced at the start of that year** (displayed in the HUD), so the player has the full year to prepare. How it resolves depends on the type:
+- **Attack** events do **not** pause the game. The wave spawns at a random map edge, a HUD warning is shown, and the calendar rolls straight into spring — time, worker labour, and resource production all continue as normal while the wave marches in and is fought live (§16.1).
+- **Tax** and **Misc** events are a **modal interruption**: a dialog opens and the **whole simulation freezes** while it is open — no time passes and nothing moves, fights, or produces. Once the player resolves it (pays the tax / acknowledges the message / closes the trade dialog), the world un-freezes and play continues for the new year.
+
+### 16.0 Event Selection & Cadence
+- Exactly **one event fires per year**, at the winter→spring boundary (so the first event is at the end of Year 1).
+- The event for the coming year is **chosen by the seeded RNG** the moment the prior year resolves, and its *type* (Attack / Tax / Misc) is recorded in state and shown in the HUD. Only the **type** is revealed in advance; the **magnitude** (exact enemy wave, tax amount, misc roll) is rolled when the event actually triggers and stays hidden until then.
+- The first yearly event should always be a good Misc, then followed by tax or attack randomly.  So in year 1-3 there will be good Misc first, then one attack and one tax in random order.    
+  Then for each three year period after that it should always be one of each any Misc, Tax, Attack but in random order, so years 4-6 will have one of each type, and years 7-9 will also have one of each type of event. 
+- Difficulty ramps with the year number: scaling in table 16.3 take `year` as an input so later years are harder.
 
 ### 16.1 Attack
-- Enemy units spawn at a **random map edge** and march toward the hamlet.
-- Quantity and composition of enemies scale with the hamlet's "size". The exact scaling metric **varies per event** — each attack event defines which hamlet attribute(s) it keys off (e.g., number of workers, number of houses, presence of a smithy/barracks, total resource value) and the resulting enemy count and type mix.
-- The player wins the encounter if all enemies are defeated or repelled; otherwise units, buildings, or resources are lost. If the Main Hall or all workers are destroyed, the game is over.
+- Enemy units spawn near the center of a **random map edge** and march toward the hamlet using the same enemy AI as mine/fishing threats: march to the nearest building or unit, then attack via the one combat resolver.
+- **Composition scales with hamlet "size" and year.** The scaling metric **varies per attack flavour** — each rolls one of a few keys so the player cannot optimise against a single stat:
+  - *Raiding party* — keys off **worker count**:  1 goblin per 2 workers.  Plus 1 Goblin Chief if 2+ swords in hamlet
+  - *Warband* — keys off **building count** (houses/barns/smithy/barracks): Number of goblins ≈ (buildings / 2),  plus 2 giant spiders for each barracks or smithy.  Plus one goblin chief if more than 4 mines. 
+  - *Plunder* — keys off **total stored resource value**: number of goblins = total value of resources / 20.  1 goblin chief per 10 gold stored. 
+  - *{Goblin/Dragon} Attack* - keys off **gold or diamonds**  named "Dragon Attack" if hamlet has 2+ diamonds, this will produce 1 dragon.   If hamlet does not have 2+ diamonds, but has 10+ gold then "Goblin Attack" which will be a goblin chief + 1 goblin per 5 gold stored. 
+- **Attack minimum.** No wave is ever empty: unless a dragon is leading it, every wave includes at least a year-scaled goblin floor of **1 goblin per 3 years** (i.e. `max(1, floor(year / 3))` goblins). This keeps a Goblin/Dragon attack on a hamlet holding neither gold nor diamonds — and any other flavour with a small keyed stat — from spawning nothing. (tunable)
+- The attack **does not freeze time or open a modal**: the wave spawns, a HUD warning banner names the raiders and points at their landing site, and the year rolls straight into spring. Time and resource production continue as normal — the wave is fought live during ordinary play, exactly like an ambient mine/fishing threat. The player wins when all enemies are defeated or repelled. Surviving enemies that reach the hamlet damage buildings and units per normal combat. **Loss check** runs continuously during the wave: if the Main Hall is destroyed or all units die, the game is over.
 
 ### 16.2 Tax
-- A specified amount of gold is demanded. The amount **varies per event** and may be flat or scale with hamlet-size attributes, depending on the event definition.
-- If gold is insufficient, the shortfall's equivalent value is taken at **double** the rate from other resources. **The player chooses which resources to surrender**, each counting toward the demand at its listed value.
-- If resources are still insufficient, **the player chooses which building(s) to surrender**; each building has a money value that counts toward covering the remaining tax.
+- A tax collector demands an amount of **gold** that varies based on tax flavour based on hamlet size and year. 
+ *Worker Tax* 2 gold per worker + 2 gold per year
+ *Weapon Tax* 3 gold per sword + 3 gold per shield + 2 gold per year
+ *Building Tax* 5 gold per smithy, 2 gold per barn, 5 gold per barracks + 2 gold per year
+ *Housing Tax* 4 gold per house + 2 gold per year
+ *Animal Tax* 4 gold per horse + 2 gold per year. 
+ *Wealth Tax*  1 gold per 5 gold + 1 gold per diamond  + 2 gold per year. 
+ *Resource Tax*  1 gold per 20 wheat, 1 gold per 20 wood, 1 gold per 15 meat, 1 gold per 20 stone, 1 gold per 15 iron + 1 gold per year
+
+### 16.2.1 Tax Payment Interface
+  - Allow the user to choose to pay with diamonds, gold or other resources at varying rates.
+  - The amount owed is listed in gold.  
+  - On the screen show the type of tax that was applied by name (eg. Animal Tax, or Building Tax) so the user has some idea how the gold owed number was calculated. 
+  - Cap the maximum gold owed in tax to year * 5.  So the first few years the tax will not be as much.
+  - 1 Gold (value 10) pays 1 gold in tax owed
+  - Diamonds get a bonus 100% so 1 Diamond (value 50) pays 10 gold in tax owed
+  - Other resources (not gold or diamonds) are worth 50% of their value when paying tax. So wheat (value 2) needs 10 wheat to equal 1 gold in tax.
+  - Wood/Stone (value 3) needs 20 wood to pay 3 gold in tax.  Meat/Iron (value 4) needs 5 meat to pay 1 gold owed in tax.
+  - Decimal (non-integer) values are shown and summed on the tax screen, but no change is given. So a user who surrenders 10 wood would see they are paying 1.5 gold but would not receive change.
+  - If the user cannot or does not want to use resources to pay tax, then the player can choose to surrender buildings.  Each building is worth 50% of it's building cost in resource value (same as non-gold resources are priced)
+  - The Main Hall can never be surrendered.
+  - If the demand still cannot be met after surrendering every eligible building, the remaining shortfall is forgiven (the player simply keeps nothing of value) — taxation alone never directly ends the game. 
 
 ### 16.3 Misc Events
-A library of 6–10 misc events provides variety. Each is defined by the data table below; most magnitudes are TBD and set during balancing. The Travelling Salesman's inventory is a **random set chosen per occurrence** of the event.
+A library of misc events provides variety. The event is chosen by seeded RNG; magnitudes scale modestly with hamlet size/year and the exact event nme is hidden until triggered. 
 
-| Event               | Good/Bad | Effect (magnitude TBD)                                        |
-|---------------------|----------|--------------------------------------------------------------|
-| Bountiful Harvest   | Good     | +X% to a stored resource                                     |
-| Crop Blight         | Bad      | 50% of stored wheat destroyed                                |
-| Travelling Salesman | Good     | Offers a random set of goods for purchase for a short window |
-| Plague              | Bad      | Lose a random unit, or an HP penalty across all units        |
-| Festival            | Good     | Temporary production bonus and reduced build times           |
-| _TBD_               | —        |                                                              |
-| _TBD_               | —        |                                                              |
-| _TBD_               | —        |                                                              |
+| Event               | Good/Bad | Effect                                                                                  |
+|---------------------|----------|-----------------------------------------------------------------------------------------|
+| Bountiful Harvest   | Good     | +50% to the single most-stored resource (rounded up)                                    |
+| Crop Blight         | Bad      | 50% of stored wheat destroyed                                                           |
+| Plague              | Bad      | Lose one random non-captain unit, **or** −25% HP across all units (whichever the roll picks)|
+| Festival            | Good     | One year of +25% gather rates and −25% build/craft/train times                           |
+| Mild Winter         | Good     | Skips winter's fishing penalty and the coming year's worker upkeep                       |
+| Harsh Winter        | Bad      | Doubles upkeep at the next end-of-season; unpaid units demote/die                        |
+| Storage Thief       | Bad      | Steals 50% of one randomly chosen stored resource (no combat)                            |
+| Lost Caravan        | Good     | A small random resource windfall (e.g., wood + iron) deposited into storage              |
+| Mercenaries         | Good     | Trade: 3 gold for one captain (max one purchase),  1 gold for one soldier (max 3 soldiers for sale) |
+| Barn Fire           | Bad      | 50% wood lost, 50% wheat lost, One barn lost if 2+ barns  
+| Forest Alchemist    | Good     | Trade : 2 wood for 1 iron.  3 wood for 1 gold.  3 wheat for 1 meat.  6 wood for 1 sword 9 wood for 1 shield.  Can do multiple trades 
+| Termites            | Bad      | Gain 1 meat for every 5 wood, lose 75% of stored wood.   
+| Wood Boon           | Good     | +50% wood. 
+| Midas Touch         | Good     | Gain 1 gold for every 5 meat in storage, lose 25% of meat 
+| Neighbors           | Good     | Gain one house and one barn.  House and barn are placed on a grass square near one of your existing buildings automatically without user selection.
+| Migrants            | Good     | Trade:  gain one worker for 1 meat.  Gain one solder for one gold.  Can do multiple trades. 
+| Migrant Laborers    | Good     | Gain workers until all houses are filled. 
+| Trader              | Good     | Trade: Allow all town trades without needing to send a worker or resources to town. Trades can only be done until the event dialog closes
+| Blight              | Bad      | Lose 25% of wheat and 25% of meat
+- For Misc events that involve trading, a dialog window should open and allow trades.  When the dialog is closed, the user cannot do any more trades.
+- For misc events all resource aquisition is capped at storage limit. 
+- Choose one random misc event each year Misc type is selected. Do not weight good/bad events.  Most misc events are good, this will counter the attack/tax years which are always bad. 
 
 ### 16.4 Event Announcement
-- At the start of each year (after the previous year's event resolves), the HUD displays the upcoming end-of-year event type so the player can plan.
-- Specific magnitude (e.g., exact tax amount) is hidden until the event triggers — only the event type is revealed in advance.
+- At the start of each year (after the previous year's event resolves), the HUD's **Upcoming Event** slot (§19.1) displays the coming event type with an icon and label so the player can plan.
+- Specific magnitude (e.g., exact tax amount, exact wave size, misc event name) is hidden until the event triggers — only the event type is revealed in advance.
+- When the event fires, a **modal announcement** (banner/dialog) names it and presents any required player choice (which resources/buildings to surrender for Tax; acknowledging a Misc effect; Trading screen, "Begin" for an Attack wave) before control returns to normal play.
 
 ---
 
@@ -386,19 +457,19 @@ A library of 6–10 misc events provides variety. Each is defined by the data ta
 
 ### 17.1 Resolution
 - When two opposing units are adjacent, they attack each other **once per second**.
-- Each attack rolls a random integer within the attacker's attack range (e.g., 0–2 → 0, 1, or 2), then subtracts the defender's defense. **Minimum damage on any hit is 0** (never negative).
+- Each attack rolls a random integer within the attacker's attack range (e.g., 1D4 → 1, 2, 3, or 4), then subtracts the defender's defense. **Minimum damage on any hit is 0** (never negative).
 - A unit at 0 HP dies and is removed from the map.
-- **One combat system resolves all fighting** — year-end attacks, goblins spawned at iron/gold mines (§13.2), and serpent/kraken fishing attacks (§17.3) all use this same adjacency + (roll − defense) resolution.
+- **One combat system resolves all fighting** — year-end attacks, goblins spawned at iron/gold mines, and serpent/kraken fishing attacks, all use this same adjacency + (roll − defense) resolution.
 
 ### 17.2 Player Combat Units
 - Soldiers and captains are the primary combat units.
-- Workers can defend themselves (attack 0–2) but are weak.
+- Workers can defend themselves but are weak.
 - Equipped weapons/armor modify stats.
 
 ### 17.3 Enemy AI
-- Enemies move toward the nearest building or unit and attack.
-- Goblins from mines focus on the mining unit first, then the nearest target.
-- Sea serpents and kraken never leave the water; they **only attack units that are actively fishing** from a water-adjacent tile. Once they appear they remain in that water until winter, even if their target is killed.
+- **Land enemies (goblins)** move toward their target — the focused mining unit first, else the nearest exposed unit, else the nearest building — re-pathing as the grid changes, and hold once adjacent so the §17.1 resolver does the hitting. An enemy with no adjacent unit batters an adjacent **building** (no defense; a razed building ejects its occupant). Land enemies move slightly slower than an unmounted worker (~1.5 tiles/sec, tunable §26).
+- Goblins from iron/gold mines spawn per mining yield and focus a nearby unit.
+- **Sea serpents and kraken never leave the water**; they only attack units that are in a water-adjacent tile (fishing or not). They surface on a water tile beside the fisher and do not stack. Once they appear they remain in that water for one year from their spawn date, and do not despawn if their target is killed.   At the start of the season one year after the season they spawned in they will despawn.
 
 ---
 
@@ -416,6 +487,7 @@ A library of 6–10 misc events provides variety. Each is defined by the data ta
 requested then the trade can proceed, otherwise the town shopkeeper will reject the trade. 
 -  When items are stored in town they are not counted towards the hamlet resource cap. 
 -  The user can move a unit to town, unload inventory and return to the hamlet, without any trades.
+-  **Change:** when an offer is worth more than the cart, the surplus is returned as change — gold (10) for whole coins, then wood (3) and wheat (2) for the sub-coin remainder, which together make any value of 2 or more. Only an indivisible remainder of exactly **1** has no representation and is lost.
 
 ---
 
@@ -428,11 +500,13 @@ requested then the trade can proceed, otherwise the town shopkeeper will reject 
 - **Upcoming event**: icon and label for the end-of-year event.
 - **Selected unit panel**: details (type, HP, current action, equipment) for the selected unit(s).
 - **Build menu**: list of buildings/actions available given current selection and resources.
+- **Notifications**: a rolling toast stack surfaces player-facing upkeep events — a worker starving, a soldier/captain demoted, a horse lost — so the player isn't silently penalised. Each notification is toasted once (deduped by id); a loaded save does not replay old ones.
 
 ### 19.2 Interaction
 - Left click building icon to enter placement mode; left click on map to place.
 - Click action icon to assign action to selected unit(s).
 - Hover tooltips for icons describe costs and effects.
+- **Hover tooltips for entities:** hovering a unit shows name, HP, current action, and equipment; hovering a building shows name, HP, and kind-specific stats (storage contribution, housing, in-progress craft/train/worker-spawn %, a mine's rolled yield, or build % while under construction). A hovered unit wins ties over a hovered building.
 
 ---
 
@@ -445,7 +519,7 @@ requested then the trade can proceed, otherwise the town shopkeeper will reject 
 - **Keyboard**:
   - Arrow keys / WASD: camera pan.
   - Number keys 1–6: enter placement mode for House (1), Barn (2), Smithy (3), Barracks (4), Mine (5), Hay Field (6). Left-click then places.
-  - F: plough the hovered grass tile with the selected workers.
+  - P: plough the hovered grass tile with the selected workers.
   - X: demolish the selected building (Main Hall excluded).
   - R: repair the selected building with the selected workers.
   - K / L: craft Sword / Shield at the selected smithy.
@@ -465,14 +539,16 @@ requested then the trade can proceed, otherwise the town shopkeeper will reject 
 4. **End-of-year event**: triggered automatically.
 5. **Win/Loss**:
    - Loss condition: losing the Main Hall, or all workers
-   - Win condition: TBD — endless
+   - Win condition: endless
 6. **Game over screen**: shows statistics (years survived, peak population, etc.) and option to restart.
 
 ### 21.1 Game Phase State Machine
 The game runs as a top-level state machine; the simulation only advances normal play in the `Playing` phase.
 - `Intro` → (New Game / Load) → `Playing`
 - `Playing` ⇄ `Paused` (Space)
-- `Playing` → `EndOfYearEvent` at the winter→spring boundary. The event (attack / tax / misc) is a **modal interruption**: season progress is suspended while it resolves, then control returns to `Playing` for the new year. (An Attack event still uses the live simulation to fight the wave; "modal" means no new season time passes until it is resolved.)
+- At the winter→spring boundary the announced year-end event fires (§16):
+  - An **Attack** stays in `Playing` — it spawns its wave and the year advances immediately, so the simulation never pauses and the wave is fought live during normal play.
+  - A **Tax** or **Misc** event enters `Playing` → `EndOfYearEvent`, a **modal interruption** that **fully pauses the simulation** (no time, motion, combat, or production) while its dialog is open. Resolving the dialog returns control to `Playing` for the new year.
 - `Playing` / `EndOfYearEvent` → `GameOver` when a loss condition is met (Main Hall destroyed or all workers dead).
 - `GameOver` → (Restart) → `Intro`
 
@@ -519,82 +595,23 @@ The game runs as a top-level state machine; the simulation only advances normal 
 
 ## 26. Outstanding Balancing Values (To Be Tuned)
 
-All prior open design questions have been resolved and folded into the sections above. The following **numeric values** remain to be set during balancing (M7); the listed defaults may be used until then.
+All prior open design questions have been resolved and folded into the sections above. The following **numeric values** remain to be set during balancing; the listed defaults may be used until then.
 
 | Value                                  | Section   | Current / Default                |
 |----------------------------------------|-----------|----------------------------------|
-| Wheat yield per harvested tile         | §11       | 4 wheat per tile                 |
-| Wood gathering rate                    | §10 / §12 | 1 wood / 5 sec                   |
-| Fishing base rate                      | §10 / §14 | 1 meat / 5 sec (season variance pending M4) |
-| Mining yield rate                      | §10 / §13 | 1 yield / 5 sec                  |
-| Mine type probabilities                | §13.1     | Stone 50% / Iron 40% / Gold 10%  |
+| Wheat yield per harvested tile         | §11       | random 10–20 wheat per tile      |
+| Plant duration                         | §10 / §11 | 10 sec                           |
+| Mountain rock-type weights             | §13.1     | Stone 60% / Iron 30% / Gold 10%  |
+| Mine type probabilities                | §13.1     | Biased by mountain rock (see §13.1 table) |
 | Diamond chance from gold mine          | §13.2     | 10% per yield                    |
 | Goblin spawn chance at iron/gold mine  | §13.2     | 15% per mining interval          |
+| Land enemy move speed                  | §17.3     | 1.5 tiles / sec                  |
+| Fishing-attack chance                  | §14       | 15% sea serpent + 7% kraken per fish yield |
 | Season duration                        | §15.2     | 60 sec                           |
-| Building HP values                     | §7        | 50–100 (see table)               |
-| Per-event tax amounts & scaling        | §16.2     | Defined per event                |
-| Per-event enemy counts & type mix      | §16.1     | Defined per event                |
-| Misc event magnitudes & full roster    | §16.3     | TBD (table to be filled in)      |
+| Main Hall worker production time       | §7.5      | 20 sec                           |
 | Base unit movement speed               | §6.5      | 2 hexes / sec                    |
 | Barracks housing capacity              | §7.4      | 4 soldiers/captains per barracks |
-| Enemy loot drop rates                  | §6.1      | TBD (e.g., goblin gold chance)   |
-| Goblin spawn count & placement at mine | §13.2     | TBD (count near the mine hex)    |
-| Hex size (circumradius, px)            | §3.2/§4.1 | 20 (hex ≈ 35×40 px)              |
+| Hex size (circumradius, px)            | §3.2/§4.1 | 40 (hex ≈ 70×80 px)              |
 | Map size                               | §4.1      | 40 × 40 hexes                    |
-
----
-
-## 27. Development Milestones
-
-Each milestone lists its **goal**, **key deliverables**, and an **acceptance check** (a concrete, testable outcome). Milestones are ordered by dependency.
-
-**Changes from the original phasing:**
-- Added **M0 — Scaffold** to stand up the game loop, central `gameState`, and render shell before feature work, since every later system depends on them.
-- Pulled **save/load forward** into M2 — round-tripping state early surfaces serialization gaps in each new system as it is added, instead of discovering them all at the end.
-- Made **pathfinding/movement** an explicit M1 deliverable and gave the **town economy + horses** their own slot in M5; the original list folded both in implicitly.
-- Added explicit acceptance checks so each phase has a clear "done" signal.
-- Folded the architecture foundations (§2.6–§2.10: sim/render split, plain-data state, seeded RNG, tick model, tooling) into **M0**, since every later system depends on them.
-
-**M0 — Scaffold**
-- Goal: A running, empty game shell on the target architecture.
-- Deliverables: TypeScript + Vite + Vitest + Playwright project; `index.html` + module loading; the `game/` (sim) ↔ `render/` ↔ `ui/` separation (§2.6) with a stateless `update(state, commands)` core; plain-data id-based `gameState` + seeded PRNG; tick-based fixed-timestep loop (30/sec, §2.7) decoupled from `requestAnimationFrame`; config-data skeleton (§2.6); HTML/CSS HUD shell; pause (Space); dev-only `window.__game` sim hook (`getState`, `enqueue`, `tick`) for browser play-tests (§2.10).
-- Acceptance: Page loads, the loop ticks at a stable rate, pause halts the sim but not rendering, a trivial headless sim test runs under Vitest, and a Playwright smoke test boots the page console-error-free.
-
-**M1 — Map, Camera & Selection**
-- Goal: A navigable world with selectable, movable units.
-- Deliverables: 40×60 procedural map gen with terrain constraints (§4.3); 32×32 tile rendering; camera (keyboard pan + edge-scroll); A\* pathfinding on walkable tiles; unit rendering, click/drag-box selection, right-click move.
-- Acceptance: Player can select one or many units and order them to walk around terrain via pathfinding.
-
-**M2 — Worker Loop & Persistence**
-- Goal: The core gather-and-deposit economy, savable.
-- Deliverables: Wood chopping (with depletion/stumps), farming lifecycle (plough/plant/grow/harvest), fishing, basic mining; carry caps and deposit-to-nearest-storage; pooled storage limit; HUD resource bar; LocalStorage auto-save + manual save/load; Playwright browser play-test covering the gather→deposit cycle and save/reload via `window.__game`.
-- Acceptance: A worker gathers each resource type, deposits respecting caps, and the full game state survives a save/reload — verified both by the Vitest sim suite and by the M2 Playwright play-tests.
-
-**M3 — Buildings**
-- Goal: The full construction system.
-- Deliverables: Placement mode + validity rules (§7.1); under-construction sprites (semi-transparent fill with a gold progress bar); all building types (house/barn/smithy/barracks/mine + hay-field tile feature); smithy crafting (1 season/item, output to a global equipment pool); barracks training paths gated by barracks housing (§7.4); repair and demolish. Mining now requires a built Mine on the mountain tile (§13.1); mine type is rolled at construction completion.
-- New commands wired through the sim: `build`, `repair`, `demolish`, `craft`, `train`, `cancel`. New unit orders: `build` (construction/repair), `operate` (smithy/barracks "enter and work" loop, with the operator hidden from the map while inside).
-- Input layer: digit hotkeys 1–6 enter placement mode for each building kind; X/R/K/L/T/C drive demolish/repair/craft-sword/craft-shield/train/cancel on the current selection.
-- Acceptance: Player can build, repair, and demolish each building type and craft/train from the relevant buildings — verified by the Vitest sim suite (`test/buildings.test.ts`) and Playwright (`e2e/m3.spec.ts`).
-
-**M4 — Seasons, Time & Upkeep**
-- Goal: The yearly cycle drives gameplay.
-- Deliverables: Season/year progression with HUD timer; season-locked actions (plant=spring, harvest=fall, fishing-rate variance); end-of-season upkeep with demotion rules (§6.3); housing/population caps (§7.4); crop loss if unharvested by winter; forest regrowth at spring.
-- Acceptance: A full year cycles correctly; upkeep is charged and demotes/kills units per §6.3; season-locked actions are gated.
-
-**M5 — Combat, Town & Horses**
-- Goal: Military units, the town marketplace and mounts.
-- Deliverables: Soldier/captain units; equipment (sword/shield) affecting stats and carry; combat resolution (1/sec, roll − defense, min 0); horses (+3 HP, ×2 speed, +5 carry, upkeep); town location with exchanging resources + horse purchase.
-- Acceptance: Units fight per the damage formula; a unit can travel to town to trade and buy a horse, then carries more and moves faster.
-
-**M6 — Enemies & End-of-Year Events**
-- Goal: The seasonal threat loop.
-- Deliverables: Enemy AI (goblins, sea serpent, kraken) with targeting rules (§17.3); mine goblin spawns; year-end event system — Attack (random-edge spawn, hamlet-size scaling), Tax (gold → double resources → buildings, player-selected), Misc event library; upcoming-event announcement in HUD.
-- Acceptance: Each event type triggers at year end and resolves correctly; loss conditions (Main Hall destroyed / all workers dead) end the game.
-
-**M7 — Polish & Balancing**
-- Goal: Ship-ready feel.
-- Deliverables: Intro and game-over screens (with run stats); tune the outstanding balancing values (§26); tooltips; readability/colorblind pass.
-- Acceptance: A new player can start from the intro, play multiple years, lose, and see end-of-run stats — with values that feel balanced.
-
+- Also tunable are all the unit attributes, enemy attributes, building attr, event lists for attack, tax and misc events.  The values used in those should be put into constants so they are easy to change. 
 

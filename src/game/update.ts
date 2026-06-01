@@ -16,6 +16,7 @@ import {
   payCost,
   placementValid,
   processSeasonTransitions,
+  applyIdleHealing,
   releaseOccupancy,
   startAttack,
   startBuild,
@@ -27,6 +28,11 @@ import {
   executeHallStore,
   executeTownStore,
   executeTownTrade,
+  triggerEvent,
+  checkLoss,
+  executeTax,
+  acknowledgeEvent,
+  applyMiscTrade,
   type SimCtx,
 } from "./actions.js";
 import {
@@ -41,12 +47,12 @@ import {
   type Building,
   type BuildingKind,
 } from "./buildings.js";
-import { stepCombat, type Enemy } from "./combat.js";
+import { stepCombat, stepEnemyAI, type Enemy } from "./combat.js";
 import type { Command } from "./commands.js";
 import { makeField, type Field } from "./fields.js";
 import type { GameMap } from "./map.js";
-import { fieldActionInSeason, seasonAt } from "./season.js";
-import { MAX_NOTIFICATIONS, type EquipmentPool, type GameState } from "./state.js";
+import { fieldActionInSeason, seasonAt, seasonBoundaries } from "./season.js";
+import { MAX_NOTIFICATIONS, type EquipmentPool, type GameState, type GroundItem } from "./state.js";
 import type { CraftItem } from "./buildings.js";
 import type { OperateMode, Unit, UnitKind } from "./units.js";
 
@@ -62,6 +68,7 @@ export function update(
   const buildings: Record<number, Building> = { ...state.buildings };
   const fields: Record<number, Field> = { ...state.fields };
   const enemies: Record<number, Enemy> = { ...state.enemies };
+  const groundItems: Record<number, GroundItem> = { ...state.groundItems };
   const equipment: EquipmentPool = { ...state.equipment };
   const townStorage = { ...state.townStorage };
 
@@ -73,6 +80,15 @@ export function update(
     mineType: { ...state.map.mineType },
     mountainType: { ...state.map.mountainType },
   };
+  // A Tax/Misc event opens a modal dialog that fully pauses the world (req §16,
+  // §21.1): while phase is `endOfYearEvent` the tick count holds at the boundary
+  // *and* the advancement passes below are skipped, so no unit moves, fights, or
+  // produces until the player closes the dialog. An Attack event never uses this
+  // phase — it spawns its wave and stays in `playing`, so the calendar and all
+  // production carry on and the wave is fought live (req §16.1).
+  const inEvent = state.phase === "endOfYearEvent";
+  const tickAdvance = inEvent ? 0 : dtTicks;
+
   const ctx: SimCtx = {
     map,
     resources: { ...state.resources },
@@ -80,42 +96,86 @@ export function update(
     buildings,
     fields,
     enemies,
+    groundItems,
     equipment,
     town: state.town,
     townStorage,
     rngState: state.rngState,
-    tickCount: state.tickCount + dtTicks,
+    tickCount: state.tickCount + tickAdvance,
     nextId: state.nextEntityId,
     notifications: state.notifications.slice(),
+    // Damage toasts are per-step: start empty so this step only carries the
+    // hits it lands, then write them back below for the renderer to float.
+    damageEvents: [],
+    healEvents: [], // heal toasts this step (req §6.2); same per-step lifecycle
+
+    phase: state.phase,
+    upcomingEvent: state.upcomingEvent,
+    activeEvent: state.activeEvent,
+    eventSchedule: state.eventSchedule.slice(),
+    eventMods: { ...state.eventMods },
+    stats: { ...state.stats },
   };
 
-  // 1) Commands become unit orders (and possibly new buildings/fields).
+  // 1) Commands become unit orders (and possibly new buildings/fields). This
+  // pass always runs — it is how the modal's payTax/acknowledgeEvent commands
+  // reach the sim and return control to `playing`.
   for (const cmd of commands) handleCommand(cmd, ctx, units);
 
-  // 2) Advance every unit's order by dtTicks. We snapshot keys first because
-  // building/training can promote a unit (mutating `units` mid-loop is fine
-  // since we iterate ids, but the snapshot makes the order explicit).
-  for (const key of Object.keys(units)) {
-    const id = Number(key);
-    units[id] = advanceUnit(units[id], dtTicks, ctx);
+  // Steps 2–6 are the live world. They are skipped wholesale while a Tax/Misc
+  // modal is open (`inEvent`), which is what makes the dialog a true pause: no
+  // unit moves, fights, heals, produces, or crosses a season boundary until the
+  // player closes it. An attack stays in `playing`, so these all run for it.
+  if (!inEvent) {
+    // 2) Advance every unit's order by dtTicks. We snapshot keys first because
+    // building/training can promote a unit (mutating `units` mid-loop is fine
+    // since we iterate ids, but the snapshot makes the order explicit).
+    for (const key of Object.keys(units)) {
+      const id = Number(key);
+      units[id] = advanceUnit(units[id], dtTicks, ctx, units);
+    }
+
+    // 3) Per-building work (smithy crafting, barracks training).
+    advanceBuildings(ctx, dtTicks, units);
+
+    // 3.5) Enemy AI (req §17.3): land goblins march toward the nearest unit or
+    // building before the combat pass swings; water predators hold their tile.
+    stepEnemyAI(ctx, units, dtTicks);
+
+    // 4) Combat resolution (req §17.1): adjacent units/enemies trade blows once
+    // per second. Runs after movement so a unit that just stepped adjacent (via an
+    // attack order or auto-defence) can swing this step. A killed unit frees any
+    // building slot it held.
+    stepCombat(ctx, units, dtTicks, (u) => releaseOccupancy(ctx, u));
+
+    // 4.5) Idle HP regeneration (req §6.2): wounded units left idle heal 5% of max
+    // HP every 5 sec. Runs after combat so this step's hits land first.
+    applyIdleHealing(ctx, units, state.tickCount);
+
+    // 5) Mature any planted crops that have grown long enough.
+    advanceFieldGrowth(ctx);
+
+    // 6) Settlement (normal play only — not gameOver). For any season boundary
+    // this step crossed: upkeep + demotion (§6.3), crop loss at fall's end
+    // (§11.5), forest regrowth at spring (§12). Then, at the winter→spring
+    // boundary, fire the announced year-end event (§16.0) — which, for a
+    // Tax/Misc, flips into the modal phase.
+    if (state.phase === "playing") {
+      processSeasonTransitions(ctx, state.tickCount, units);
+      if (ctx.phase === "playing") {
+        const startsYear = seasonBoundaries(state.tickCount, ctx.tickCount).some((b) => b.startsYear);
+        if (startsYear) triggerEvent(ctx, units);
+      }
+    }
   }
 
-  // 3) Per-building work (smithy crafting, barracks training).
-  advanceBuildings(ctx, dtTicks, units);
+  // 7) Loss check (req §21.1): Main Hall destroyed or all workers dead → gameOver.
+  // Runs continuously, including mid-attack.
+  checkLoss(ctx, units);
 
-  // 4) Combat resolution (req §17.1): adjacent units/enemies trade blows once
-  // per second. Runs after movement so a unit that just stepped adjacent (via an
-  // attack order or auto-defence) can swing this step. A killed unit frees any
-  // building slot it held.
-  stepCombat(ctx, units, dtTicks, (u) => releaseOccupancy(ctx, u));
-
-  // 5) Mature any planted crops that have grown long enough.
-  advanceFieldGrowth(ctx);
-
-  // 6) End-of-season settlement for any season boundary this step crossed:
-  // upkeep + demotion (§6.3), crop loss at fall's end (§11.5), forest regrowth
-  // at spring (§12). Runs last so it settles against this step's results.
-  processSeasonTransitions(ctx, state.tickCount, units);
+  // Run-stat tracking (§21): peak population for the game-over screen.
+  const pop = Object.keys(units).length;
+  if (pop > ctx.stats.peakPopulation) ctx.stats = { ...ctx.stats, peakPopulation: pop };
 
   // Storage capacity can change mid-step if a build completed; keep `capacity`
   // synced so a follow-up deposit (next step) uses the right value.
@@ -128,14 +188,25 @@ export function update(
     buildings: ctx.buildings,
     fields: ctx.fields,
     enemies: ctx.enemies,
+    groundItems: ctx.groundItems,
     resources: ctx.resources,
     equipment: ctx.equipment,
     townStorage: ctx.townStorage,
     rngState: ctx.rngState,
     nextEntityId: ctx.nextId,
     tickCount: ctx.tickCount,
-    // Keep only the most recent events so the log (and save) stays bounded (T7).
+    phase: ctx.phase,
+    upcomingEvent: ctx.upcomingEvent,
+    activeEvent: ctx.activeEvent,
+    eventSchedule: ctx.eventSchedule,
+    eventMods: ctx.eventMods,
+    stats: ctx.stats,
+    // Keep only the most recent events so the log (and save) stays bounded.
     notifications: ctx.notifications.slice(-MAX_NOTIFICATIONS),
+    // This step's combat damage toasts, handed to the renderer.
+    damageEvents: ctx.damageEvents,
+    // This step's heal toasts, handed to the renderer (req §6.2).
+    healEvents: ctx.healEvents,
   };
 }
 
@@ -314,7 +385,7 @@ function handleCommand(cmd: Command, ctx: SimCtx, units: Record<number, Unit>): 
   if (cmd.type === "townTrade") {
     const u = units[cmd.unitId];
     if (!u) return;
-    const updated = executeTownTrade(ctx, u, cmd.cart, cmd.buyHorse, cmd.offerUnit, cmd.offerStorage);
+    const updated = executeTownTrade(ctx, u, cmd.cart, cmd.buyHorse, cmd.offerUnit, cmd.offerStorage, units);
     if (updated) units[cmd.unitId] = updated;
     return;
   }
@@ -325,6 +396,20 @@ function handleCommand(cmd: Command, ctx: SimCtx, units: Record<number, Unit>): 
       ejectIfInside(u, ctx);
       units[id] = { ...u, insideBuildingId: null, order: { type: "idle" } };
     }
+    return;
+  }
+  if (cmd.type === "payTax") {
+    // Only valid while a Tax event is resolving (executeTax guards this).
+    executeTax(ctx, units, cmd.offerResources, cmd.surrenderBuildingIds, cmd.forfeit);
+    return;
+  }
+  if (cmd.type === "miscTrade") {
+    // Valid only while a trade-dialog Misc event is open (applyMiscTrade guards it).
+    applyMiscTrade(ctx, units, cmd.offerId);
+    return;
+  }
+  if (cmd.type === "acknowledgeEvent") {
+    acknowledgeEvent(ctx);
     return;
   }
 }

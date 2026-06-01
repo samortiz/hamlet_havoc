@@ -47,7 +47,6 @@ test("a unit travels to town, buys a horse, and then moves faster", async ({ pag
     const s = g.getState();
     // Stock upkeep food so the long fast-forward (which crosses a season
     // boundary) doesn't starve the workers or the freshly-bought horse.
-    s.resources.hay = 20;
     s.resources.wheat = 20;
     s.resources.meat = 20;
     const id = Number(Object.keys(s.units)[0]);

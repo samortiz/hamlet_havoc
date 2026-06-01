@@ -1,4 +1,4 @@
-// M3 — construction system tests (req §7, §7.1, §7.2, §7.3, §7.4). Each test
+// Construction system tests (req §7, §7.1, §7.2, §7.3, §7.4). Each test
 // drives the headless sim through a full lifecycle (place → build → done; place
 // → damage → repair; place → demolish; smithy crafting; barracks training and
 // the housing-cap gate). Mechanics live in sim tests; the e2e suite only
@@ -239,13 +239,13 @@ describe("smithy crafting (req §7.2)", () => {
     // Start crafting swords.
     s = update(s, [{ type: "craft", unitIds: [id], buildingId: smithy.id, item: "sword" }], 1);
     // Wait long enough for two swords + walk-to-smithy time.
-    s = update(s, [], CRAFT_TICKS * 2 + TICKS_PER_SECOND * 20);
+    s = update(s, [], CRAFT_TICKS.sword * 2 + TICKS_PER_SECOND * 20);
     expect(s.equipment.sword).toBeGreaterThanOrEqual(1);
-    expect(s.resources.iron).toBeLessThanOrEqual(20 - 2); // at least one sword paid
+    expect(s.resources.iron).toBeLessThanOrEqual(20 - 3); // at least one sword paid
 
     // Switch the same operator to shields.
     s = update(s, [{ type: "craft", unitIds: [id], buildingId: smithy.id, item: "shield" }], 1);
-    s = update(s, [], CRAFT_TICKS + TICKS_PER_SECOND * 10);
+    s = update(s, [], CRAFT_TICKS.shield + TICKS_PER_SECOND * 10);
     expect(s.equipment.shield).toBeGreaterThanOrEqual(1);
   });
 });
@@ -345,7 +345,7 @@ describe("hay field (req §7)", () => {
   });
 });
 
-describe("Main Hall worker production (T5)", () => {
+describe("Main Hall worker production", () => {
   const mainHallId = (s: GameState) => buildingsOfKind(s, "mainHall")[0];
   const workerCount = (s: GameState) =>
     Object.values(s.units).filter((u) => u.kind === "worker").length;

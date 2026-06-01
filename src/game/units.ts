@@ -1,8 +1,8 @@
 // Unit entities (req §6). Plain data, referenced by integer id from GameState.
 // Position is in tile-space (fractional while moving). Orders drive behavior via
-// a small per-unit state machine (req §6.5). M2 adds the gather/farming orders;
-// M3 adds build/operate (construct, repair, smithy craft, barracks train). The
-// rest (trade/attack) arrive in later milestones.
+// a small per-unit state machine (req §6.5). Orders cover gather/farming,
+// build/operate (construct, repair, smithy craft, barracks train), and
+// trade/attack.
 
 import {
   HORSE_CARRY_BONUS,
@@ -155,13 +155,16 @@ export function maxHp(kind: UnitKind): number {
   return UNIT_MAX_HP[kind];
 }
 
-export function makeWorker(id: number, x: number, y: number): Unit {
+// A fresh unit of any kind at full HP, idle, unequipped (req §6.1). Used when a
+// unit appears outside the normal training pipeline — Main Hall production,
+// Misc-event recruits (Mercenaries/Migrants/Migrant Laborers, §16.3).
+export function makeUnit(id: number, kind: UnitKind, x: number, y: number): Unit {
   return {
     id,
-    kind: "worker",
+    kind,
     x,
     y,
-    hp: UNIT_MAX_HP.worker,
+    hp: UNIT_MAX_HP[kind],
     carrying: {},
     insideBuildingId: null,
     equipped: { sword: false, shield: false },
@@ -169,4 +172,8 @@ export function makeWorker(id: number, x: number, y: number): Unit {
     attackCooldown: 0,
     order: { type: "idle" },
   };
+}
+
+export function makeWorker(id: number, x: number, y: number): Unit {
+  return makeUnit(id, "worker", x, y);
 }

@@ -30,12 +30,11 @@ import {
 import { mountainTypeAt, tileAt, type MineType, type TileType } from "../game/map.js";
 import { carriedTotal, RESOURCE_TYPES, type ResourceType } from "../game/resources.js";
 import type { GameState } from "../game/state.js";
-import { hasHorse, type FieldAction, type GatherResource, type Order } from "../game/units.js";
+import { hasHorse, maxHp, type FieldAction, type GatherResource, type Order } from "../game/units.js";
 import type { View } from "../ui/camera.js";
 import { buildingSprite, terrainSprite, unitSprite } from "./sprites.js";
 
 const RESOURCE_COLOR: Record<ResourceType, string> = {
-  hay: COLORS.resourceHay,
   wheat: COLORS.resourceWheat,
   wood: COLORS.resourceWood,
   stone: COLORS.resourceStone,
@@ -63,7 +62,7 @@ const TERRAIN_COLOR: Record<TileType, string> = {
   stump: COLORS.terrainStump,
 };
 
-// Marker colour for a mountain's rock type and a mine's rolled type (T2). The
+// Marker colour for a mountain's rock type and a mine's rolled type. The
 // MineType and MountainType unions share these three members.
 const ORE_TYPE_COLOR: Record<MineType, string> = {
   stone: COLORS.resourceStone,
@@ -122,7 +121,7 @@ function lerpColor(a: string, b: string, t: number): string {
   return `rgb(${r}, ${g}, ${bl})`;
 }
 
-// Display colour for a field tile (T8). A planted wheat field greens up as it
+// Display colour for a field tile. A planted wheat field greens up as it
 // matures — lerping from the pale "planted" green toward the deep "grown" green
 // over CROP_GROW_TICKS — so the player can read growth at a glance; a ripe field
 // shows the full "grown" green. Everything else uses its flat stage colour.
@@ -162,7 +161,28 @@ const SPRITE_DRAW_H = HEX_HEIGHT;
 export interface Renderer {
   render: (state: GameState, view: View) => void;
   resize: () => void;
+  // Spawn a floating "-N" combat-damage toast over a struck combatant.
+  // `tx, ty` are tile-space; `target` tints damage to our units vs. enemies.
+  addDamage: (tx: number, ty: number, amount: number, target: "unit" | "enemy") => void;
+  // Spawn a floating green "+N" heal toast over a healed unit (req §6.2).
+  addHeal: (tx: number, ty: number, amount: number) => void;
 }
+
+// One rising "-N" damage toast. Lives only in the render layer: anchored to
+// the world pixel where the hit landed, it floats up and fades over its lifetime,
+// then is culled. Timing is wall-clock — this is a cosmetic effect, never the sim.
+interface DamageFloater {
+  wx: number; // world pixel (already through hexToPixel), pans with the camera
+  wy: number;
+  text: string;
+  color: string;
+  bornMs: number;
+}
+const FLOATER_LIFE_MS = 900;
+const FLOATER_RISE_PX = 28;
+const FLOATER_UNIT_COLOR = "#ff5a47"; // our unit took damage (alarming red)
+const FLOATER_ENEMY_COLOR = "#ffe7a3"; // we hit an enemy (pale gold)
+const FLOATER_HEAL_COLOR = "#5ad17a"; // a unit healed (reassuring green)
 
 // Pre-compute the 6 vertex offsets for a pointy-top hex (apothem on the
 // horizontal axis). Indices go clockwise from the bottom-right vertex.
@@ -191,6 +211,58 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
   const ctx = canvas.getContext("2d");
   if (!ctx) throw new Error("2D canvas context unavailable");
   const c = ctx;
+
+  // Active combat-damage toasts. Fed by addDamage from the step loop,
+  // advanced + culled each render.
+  const floaters: DamageFloater[] = [];
+
+  function addDamage(tx: number, ty: number, amount: number, target: "unit" | "enemy"): void {
+    if (amount <= 0) return;
+    const { px, py } = hexToPixel(tx, ty);
+    floaters.push({
+      wx: px,
+      wy: py - HEX_SIZE * 0.5, // start just above the combatant's head
+      text: `-${amount}`,
+      color: target === "unit" ? FLOATER_UNIT_COLOR : FLOATER_ENEMY_COLOR,
+      bornMs: performance.now(),
+    });
+  }
+
+  function addHeal(tx: number, ty: number, amount: number): void {
+    if (amount <= 0) return;
+    const { px, py } = hexToPixel(tx, ty);
+    floaters.push({
+      wx: px,
+      wy: py - HEX_SIZE * 0.5, // start just above the unit's head
+      text: `+${amount}`,
+      color: FLOATER_HEAL_COLOR,
+      bornMs: performance.now(),
+    });
+  }
+
+  // Advance and draw the rising damage toasts (world space, so call inside the
+  // camera translate). Each floater rises and fades over its lifetime; expired
+  // ones are spliced out.
+  function drawFloaters(): void {
+    if (floaters.length === 0) return;
+    const nowMs = performance.now();
+    c.textAlign = "center";
+    c.textBaseline = "middle";
+    c.font = `bold ${Math.round(HEX_SIZE * 0.45)}px system-ui, sans-serif`;
+    c.lineWidth = 3;
+    for (let i = floaters.length - 1; i >= 0; i--) {
+      const f = floaters[i];
+      const t = (nowMs - f.bornMs) / FLOATER_LIFE_MS;
+      if (t >= 1) { floaters.splice(i, 1); continue; }
+      const y = f.wy - FLOATER_RISE_PX * t;
+      c.globalAlpha = 1 - t;
+      c.strokeStyle = "rgba(0,0,0,0.75)";
+      c.strokeText(f.text, f.wx, y);
+      c.fillStyle = f.color;
+      c.fillText(f.text, f.wx, y);
+    }
+    c.globalAlpha = 1;
+  }
 
   function resize(): void {
     const rect = canvas.getBoundingClientRect();
@@ -223,8 +295,24 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
     c.fillRect(x, topY, w * frac, h);
   }
 
+  // Health bar over a wounded unit. Same footprint as the work progress bar
+  // but coloured like the building damage bar (dark-red track, green fill) so the
+  // two read differently at a glance. `frac` is hp / maxHp, clamped to [0, 1].
+  function drawUnitHpBar(px: number, topY: number, frac: number): void {
+    const w = HEX_SIZE * 0.7;
+    const h = 4;
+    const x = px - w / 2;
+    const f = Math.max(0, Math.min(1, frac));
+    c.fillStyle = "rgba(0,0,0,0.55)";
+    c.fillRect(x - 1, topY - 1, w + 2, h + 2);
+    c.fillStyle = "#5c2018";
+    c.fillRect(x, topY, w, h);
+    c.fillStyle = "#7ea854";
+    c.fillRect(x, topY, w * f, h);
+  }
+
   // A small filled, dark-rimmed dot used to tag a tile with an ore/rock type
-  // (mountain rock type and built-mine yield type, T2).
+  // (mountain rock type and built-mine yield type).
   function drawTypeBadge(cx: number, cy: number, r: number, color: string): void {
     c.beginPath();
     c.arc(cx, cy, r, 0, Math.PI * 2);
@@ -233,6 +321,24 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
     c.lineWidth = 1.5;
     c.strokeStyle = "rgba(0,0,0,0.6)";
     c.stroke();
+  }
+
+  // A small "×N" pill tagging a tile that holds several stacked units, so a
+  // stack reads differently from a lone unit.
+  function drawCountBadge(cx: number, cy: number, n: number): void {
+    const label = `×${n}`;
+    c.font = `bold ${Math.round(HEX_SIZE * 0.4)}px system-ui, sans-serif`;
+    c.textAlign = "center";
+    c.textBaseline = "middle";
+    const w = c.measureText(label).width + 8;
+    const h = Math.round(HEX_SIZE * 0.42);
+    c.fillStyle = "rgba(20, 16, 10, 0.88)";
+    c.fillRect(cx - w / 2, cy - h / 2, w, h);
+    c.lineWidth = 1.5;
+    c.strokeStyle = COLORS.gold;
+    c.strokeRect(cx - w / 2, cy - h / 2, w, h);
+    c.fillStyle = COLORS.parchment;
+    c.fillText(label, cx, cy);
   }
 
   function drawSpriteAt(img: HTMLImageElement, px: number, py: number): void {
@@ -305,7 +411,7 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
       c.fill();
     }
 
-    // Main Hall raising a worker (T5): progress bar below the building.
+    // Main Hall raising a worker: progress bar below the building.
     if (b.kind === "mainHall" && b.spawning) {
       drawProgressBar(px, py + innerSize * 0.7, b.spawnProgress / WORKER_SPAWN_TICKS);
     }
@@ -363,7 +469,7 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
         } else {
           fillHex(px, py, HEX_SIZE, TERRAIN_COLOR[t]);
         }
-        // Mountain rock-type badge (T2): a small outlined dot near the peak so
+        // Mountain rock-type badge: a small outlined dot near the peak so
         // the player can read a mountain's type before committing a Mine to it.
         if (t === "mountain") {
           const mt = mountainTypeAt(state.map, ty * MAP_WIDTH + tx);
@@ -382,7 +488,7 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
     const selectedBuildings = new Set(view.selectedBuildings ?? []);
     for (const b of Object.values(state.buildings)) {
       drawBuilding(b);
-      // Built Mine: tag it with the type it yields once that's been rolled (T2).
+      // Built Mine: tag it with the type it yields once that's been rolled.
       if (b.kind === "mine" && isBuilt(b)) {
         const mineType = state.map.mineType[b.y * MAP_WIDTH + b.x];
         if (mineType) {
@@ -409,7 +515,27 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
       c.fillText("Town", px, py);
     }
 
-    // Enemies (req §6.1, §17): red discs with an HP pip. Stationary in M5.
+    // Loose loot on the ground (req §6.2): a small resource-coloured pouch with
+    // its quantity, sitting low on the tile so units/enemies draw over it.
+    for (const g of Object.values(state.groundItems)) {
+      const { px, py } = hexToPixel(g.x, g.y);
+      const gy = py + HEX_SIZE * 0.28;
+      const r = HEX_SIZE * 0.16;
+      c.beginPath();
+      c.arc(px, gy, r, 0, Math.PI * 2);
+      c.fillStyle = RESOURCE_COLOR[g.resource];
+      c.fill();
+      c.lineWidth = 1.5;
+      c.strokeStyle = "#2a1c0a";
+      c.stroke();
+      c.fillStyle = COLORS.buildingLabel;
+      c.font = `bold ${Math.round(HEX_SIZE * 0.22)}px system-ui, sans-serif`;
+      c.textAlign = "center";
+      c.textBaseline = "middle";
+      c.fillText(String(g.qty), px, gy);
+    }
+
+    // Enemies (req §6.1, §17): red discs with an HP pip.
     for (const e of Object.values(state.enemies)) {
       const { px, py } = hexToPixel(e.x, e.y);
       const r = HEX_SIZE * 0.42;
@@ -502,11 +628,19 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
         c.strokeStyle = COLORS.unitOutline;
         c.stroke();
       }
+      // Health bar above the head when wounded. Hidden at full HP to keep
+      // the field uncluttered; mirrors the building damage bar. The work progress
+      // bar (if any) stacks just above it so the two never overlap.
+      let barTop = headY - 10;
+      if (u.hp < maxHp(u.kind)) {
+        drawUnitHpBar(px, barTop, u.hp / maxHp(u.kind));
+        barTop -= 8;
+      }
       // Action progress bar above the head (ploughing/planting/harvesting,
       // gathering wood/fish/ore). Construction shows its own bar on the building.
       const progress = unitWorkProgress(u.order);
       if (progress !== null) {
-        drawProgressBar(px, headY - 10, progress);
+        drawProgressBar(px, barTop, progress);
       }
       if (selected.has(u.id)) {
         c.beginPath();
@@ -516,6 +650,25 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
         c.stroke();
       }
     }
+
+    // When several units share a tile, tag it with a small "×N" badge so a
+    // stack reads differently from a lone unit.
+    const tileUnitCount = new Map<number, number>();
+    for (const u of Object.values(state.units)) {
+      if (u.insideBuildingId !== null) continue;
+      const idx = Math.round(u.y) * MAP_WIDTH + Math.round(u.x);
+      tileUnitCount.set(idx, (tileUnitCount.get(idx) ?? 0) + 1);
+    }
+    tileUnitCount.forEach((n, idx) => {
+      if (n < 2) return;
+      const tx = idx % MAP_WIDTH;
+      const ty = (idx - tx) / MAP_WIDTH;
+      const { px, py } = hexToPixel(tx, ty);
+      drawCountBadge(px + HEX_SIZE * 0.5, py - HEX_SIZE * 0.62, n);
+    });
+
+    // Combat damage toasts float above everything in the world.
+    drawFloaters();
 
     c.restore();
 
@@ -530,7 +683,7 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
     }
   }
 
-  return { render, resize };
+  return { render, resize, addDamage, addHeal };
 }
 
 // Re-export the hex geometry constants for any callers that need them outside

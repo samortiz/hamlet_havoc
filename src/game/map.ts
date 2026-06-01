@@ -7,6 +7,7 @@
 
 import {
   FOREST_WOOD_MAX,
+  FOREST_WOOD_MIN,
   HAMLET_CLEARING_RADIUS,
   MAP_HEIGHT,
   MAP_WIDTH,
@@ -18,14 +19,14 @@ import { buildingAt, isBuilt, type Building } from "./buildings.js";
 import { hexDistance, hexNeighbors, hexStep } from "./hex.js";
 import { rngInt, rngNext } from "./rng.js";
 
-// "stump" is a depleted forest tile: walkable, no more wood, and (from M4)
+// "stump" is a depleted forest tile: walkable, no more wood, and
 // regrows to forest at spring (req §4.2, §12).
 export type TileType = "grass" | "forest" | "water" | "mountain" | "stump";
 
 // Mine type assigned to a mountain tile the first time it is mined (req §13.1).
 export type MineType = "stone" | "iron" | "gold";
 
-// Visible rock type of a mountain tile, rolled at map-gen (T2). It biases the
+// Visible rock type of a mountain tile, rolled at map-gen. It biases the
 // mine type a player gets when they build a Mine there (see config
 // MINE_TYPE_WEIGHTS_BY_MOUNTAIN).
 export type MountainType = "stone" | "iron" | "gold";
@@ -45,7 +46,7 @@ export interface GameMap {
   // serialize without bloating the terrain array.
   forestWood: Record<number, number>;
   mineType: Record<number, MineType>;
-  // Rock type of every mountain tile, assigned once at map-gen (T2). Dense over
+  // Rock type of every mountain tile, assigned once at map-gen. Dense over
   // mountains; a missing entry (old saves) is treated as "stone".
   mountainType: Record<number, MountainType>;
 }
@@ -97,7 +98,7 @@ export function forestRemaining(map: GameMap, idx: number): number {
 }
 
 // Rock type of a mountain tile. Old saves predate per-tile typing, so a missing
-// entry falls back to "stone" (T2).
+// entry falls back to "stone".
 export function mountainTypeAt(map: GameMap, idx: number): MountainType {
   return map.mountainType[idx] ?? "stone";
 }
@@ -243,7 +244,7 @@ export function generateMap(rngState: number): {
   res = scatter(tiles, "water", Math.round(TERRAIN_TARGET.water * n), 5, 12, seeded.water, rng);
   rng = res.rngState;
 
-  // Roll a rock type for every mountain tile (T2). Done after terrain is final
+  // Roll a rock type for every mountain tile. Done after terrain is final
   // so the set of mountains is fixed; uses the seeded RNG so a seed is stable.
   const mountainType: Record<number, MountainType> = {};
   for (let i = 0; i < n; i++) {
@@ -255,7 +256,17 @@ export function generateMap(rngState: number): {
     else mountainType[i] = "gold";
   }
 
-  const map: GameMap = { width: MAP_WIDTH, height: MAP_HEIGHT, tiles, forestWood: {}, mineType: {}, mountainType };
+  // Roll each forest tile's wood reserve (1D6+2, req §12) after terrain is final
+  // so the seeded RNG stays stable for a given seed.
+  const forestWood: Record<number, number> = {};
+  for (let i = 0; i < n; i++) {
+    if (tiles[i] !== "forest") continue;
+    let w: number;
+    [rng, w] = rngInt(rng, FOREST_WOOD_MIN, FOREST_WOOD_MAX);
+    forestWood[i] = w;
+  }
+
+  const map: GameMap = { width: MAP_WIDTH, height: MAP_HEIGHT, tiles, forestWood, mineType: {}, mountainType };
   return {
     map,
     rngState: rng,

@@ -1,7 +1,7 @@
 // Farming lifecycle (req §11): plough -> plant (costs 1 wheat) -> grow ->
 // harvest (yields a random WHEAT_HARVEST_MIN..MAX) -> field reverts to ploughed.
 // Planting is spring-locked and harvest is fall-locked (§15.3); the timing below
-// keeps each step inside its legal season. M4 upkeep eats meat first (§6.3), so
+// keeps each step inside its legal season. End-of-season upkeep eats meat first (§6.3), so
 // stocking meat keeps the wheat we measure here untouched.
 
 import { describe, expect, it } from "vitest";
@@ -84,7 +84,7 @@ describe("farming lifecycle", () => {
     expect(s.resources.wheat).toBe(0);
   });
 
-  it("an idle worker auto-plants a ploughed field in spring (T8)", () => {
+  it("an idle worker auto-plants a ploughed field in spring", () => {
     let s = createInitialState(2024);
     const id = firstWorkerId(s);
     s = { ...s, resources: { ...s.resources, meat: 12, wheat: 10 } };
@@ -102,7 +102,7 @@ describe("farming lifecycle", () => {
     expect(fieldAt(s.fields, tx, ty)!.stage).toBe("planted");
   });
 
-  it("an idle worker auto-harvests a grown field in fall (T8)", () => {
+  it("an idle worker auto-harvests a grown field in fall", () => {
     let s = createInitialState(2024);
     const id = firstWorkerId(s);
     const tx = HAMLET_CENTER.x + 3;

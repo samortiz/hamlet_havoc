@@ -1,4 +1,19 @@
-TODO 
+TODO
 
-T1. Remove "Sell at Town" and "Buy Horse" buttons at the bottom
+T1. When you mouse over a forest tile, show the amount of wood remaining to be harvested from it
 
+T2. Change the name of "hay" or "Hay field" to "Stables".  
+
+T3. When constructing a building (mine in particular), enusre the unit is centered on a tile, currently a mine can be built while standing part-way between tiles. 
+
+T4. When crafting a sword or shield in the smithy and the "craft sword" button is clicked, it should only make one sword/shield and then stop and worker should stand idle. Currently it continually produces items.
+
+T5. The requirements for captain's carry capacity are changed. Captains can now carry swords, shields, gold and diamonds, but no other resources
+
+T6. HP on units and buildings should always be an integer. Ensure the value is rounded before displaying, I saw some long decimal numbers. 
+
+T7. Make the town larger, it should use 7 tiles, and add a few different building graphics from under docs/source_images/kenney/ to make it look more like a town.
+
+T8. Please add a way to adjust the speed that time passes.  We should have 1/4 speed, 1/2 speed, regular, 2x, and 4x as speed options.
+
+T9. For Misc year end events do NOT show the name of the event only show the user "Misc".  The event name will show when the event occurs and the dialog opens at the end of the year. 

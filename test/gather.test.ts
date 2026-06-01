@@ -3,10 +3,10 @@
 // returns for more. Headless sim tests; the e2e suite checks the browser path.
 //
 // These exercises run inside the opening Spring season (under 60s) or stock
-// meat so M4 end-of-season upkeep (§6.3) doesn't starve the worker mid-test.
+// meat so end-of-season upkeep (§6.3) doesn't starve the worker mid-test.
 
 import { describe, expect, it } from "vitest";
-import { FOREST_WOOD_MAX, TICKS_PER_SECOND, WOOD_ROAM_RADIUS } from "../src/config/index.js";
+import { FOREST_WOOD_MAX, TICKS_PER_SECOND, WOOD_ROAM_RADIUS, WORKER_CARRY_CAP } from "../src/config/index.js";
 import { storageCapacity } from "../src/game/buildings.js";
 import { hexDistance } from "../src/game/hex.js";
 import { tileAt, type TileType } from "../src/game/map.js";
@@ -52,7 +52,9 @@ describe("wood gathering", () => {
     // Walk out + 5×5s chops + walk back + deposit; stays within the first season.
     s = update(s, [], TICKS_PER_SECOND * 50);
 
-    expect(s.resources.wood).toBeGreaterThanOrEqual(FOREST_WOOD_MAX);
+    // Forest tiles hold a random 1D6+2 wood now, so a tile may carry fewer than a
+    // full load — but the worker fills (and deposits) at least one carry cap.
+    expect(s.resources.wood).toBeGreaterThanOrEqual(WORKER_CARRY_CAP);
   });
 
   it("depletes a forest tile to a stump after FOREST_WOOD_MAX yields (req §12)", () => {
@@ -100,8 +102,10 @@ describe("wood roaming (req: hop to a nearby tree once a tile is chopped out)", 
     expect(start).not.toBeNull();
 
     // Stock food so end-of-season upkeep (§6.3) doesn't starve the worker over
-    // the multi-season run this needs to chop through more than one tile.
-    s = { ...s, resources: { ...s.resources, meat: 30 } };
+    // the multi-season run this needs to chop through more than one tile. Kept
+    // modest so the pool (12 starting wheat + this) stays under storage cap and
+    // leaves room for the gathered wood to land.
+    s = { ...s, resources: { ...s.resources, meat: 10 } };
     s = update(s, [{ type: "gather", unitIds: [id], tx: start!.x, ty: start!.y }], 1);
     s = update(s, [], TICKS_PER_SECOND * 200);
 
@@ -137,18 +141,24 @@ describe("mining", () => {
     const w = s.units[id];
     const mountain = findNearestTile(s, "mountain", w.x, w.y)!;
 
-    // M3: mining requires a built mine on the mountain tile (req §13).
+    // Mining requires a built mine on the mountain tile (req §13).
     // Mine costs 4 wood — stock it and build the mine first, then mine it.
     // Stock some meat (within storage cap) so upkeep doesn't starve the miner
-    // over the long run (§6.3) — but not so much that the pool can't take ore.
-    s = { ...s, resources: { ...s.resources, wood: 10, meat: 25 } };
+    // over the long run (§6.3) — kept modest so the pool (12 starting wheat +
+    // this) stays under the storage cap and leaves room for the mined ore.
+    s = { ...s, resources: { ...s.resources, wood: 6, meat: 8 } };
     s = update(s, [{ type: "build", unitIds: [id], kind: "mine", tx: mountain.x, ty: mountain.y }], 1);
     s = update(s, [], TICKS_PER_SECOND * 60);
     s = update(s, [{ type: "gather", unitIds: [id], tx: mountain.x, ty: mountain.y }], 1);
     s = update(s, [], TICKS_PER_SECOND * 250);
 
-    const total = s.resources.stone + s.resources.iron + s.resources.gold + s.resources.diamond;
-    expect(total).toBeGreaterThan(0);
+    // Mine yields surface as gathered ore — counted whether deposited to the pool
+    // or still carried (a mine goblin (§13.2) may pin the miner before it banks).
+    const u = s.units[id];
+    const pooled = s.resources.stone + s.resources.iron + s.resources.gold + s.resources.diamond;
+    const carried =
+      (u?.carrying.stone ?? 0) + (u?.carrying.iron ?? 0) + (u?.carrying.gold ?? 0) + (u?.carrying.diamond ?? 0);
+    expect(pooled + carried).toBeGreaterThan(0);
   });
 
   it("gathering on a bare mountain (no mine) is a no-op", () => {

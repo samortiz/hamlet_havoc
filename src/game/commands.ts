@@ -38,7 +38,7 @@ export type Command =
   // Send a unit into a barracks to train (req §7.3). The trainee promotes one
   // rank when 1 season of training completes; gated by barracks housing.
   | { type: "train"; unitIds: number[]; buildingId: number; toKind: TrainTarget }
-  // Tell the Main Hall to raise a new worker (T5). Free but slow
+  // Tell the Main Hall to raise a new worker. Free but slow
   // (WORKER_SPAWN_TICKS); gated by worker housing (§7.4). No-op if the hall is
   // already producing one or housing is full.
   | { type: "spawnWorker"; buildingId: number }
@@ -70,7 +70,7 @@ export type Command =
       amount: number;
       toStorage: boolean;
     }
-  // Hall/storage interface (T9): move `amount` of one resource between the unit's
+  // Hall/storage interface: move `amount` of one resource between the unit's
   // inventory and the hamlet's shared resource pool, via a built storage building
   // the unit stands on or next to. `toStorage` true = unit → pool (bounded by the
   // pool's free space), false = pool → unit (bounded by carry room). Lets the
@@ -98,4 +98,23 @@ export type Command =
     }
   // Stop whatever order the unit currently has and return to idle. Used to pull
   // a smithy operator out, cancel a build, etc.
-  | { type: "cancel"; unitIds: number[] };
+  | { type: "cancel"; unitIds: number[] }
+  // Pay a year-end Tax event (req §16.2). `offerResources` are surrendered from
+  // the hamlet pool (counted at double rate) and `surrenderBuildingIds` are given
+  // up (each worth a fraction of its build value). `forfeit` accepts even when
+  // the offer falls short (the remaining demand is then forgiven). Only valid
+  // while a Tax event is resolving.
+  | {
+      type: "payTax";
+      offerResources: Inventory;
+      surrenderBuildingIds: number[];
+      forfeit: boolean;
+    }
+  // Execute one fixed offer of a trade-dialog Misc event (req §16.3): Mercenaries,
+  // Forest Alchemist, Migrants, or Trader. `offerId` names the offer in
+  // MISC_TRADE_OFFERS for the active event. Repeatable until the modal is closed
+  // (acknowledgeEvent); each is deterministic, paid from the hamlet pool.
+  | { type: "miscTrade"; offerId: string }
+  // Dismiss a resolved year-end event modal (req §16.4): a Misc event, or a Tax
+  // already settled from the treasury. Returns control to normal play.
+  | { type: "acknowledgeEvent" };

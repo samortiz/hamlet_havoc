@@ -11,7 +11,7 @@
 // module only holds transient view state — the cart and the pending offer.
 
 import { HORSE_COST_VALUE } from "../config/index.js";
-import { evaluateTownTrade, isUnitAtTown } from "../game/actions.js";
+import { evaluateTownTrade, hasFreeStable, isUnitAtTown } from "../game/actions.js";
 import type { Command } from "../game/commands.js";
 import { HAMLET_CENTER } from "../game/map.js";
 import {
@@ -29,7 +29,6 @@ export interface TownPanel {
 }
 
 const RESOURCE_LABEL: Record<ResourceType, string> = {
-  hay: "Hay",
   wheat: "Wheat",
   wood: "Wood",
   stone: "Stone",
@@ -163,6 +162,7 @@ export function createTownPanel(opts: {
       r.append(val, btn("+", () => { cart[t] = (cart[t] ?? 0) + 1; }, { title: "Add one to cart" }));
       sale.body.append(r);
     }
+    const freeStable = hasFreeStable(state.units, state.fields);
     {
       const r = row("Horse 🐴");
       const val = document.createElement("span");
@@ -172,8 +172,12 @@ export function createTownPanel(opts: {
       r.append(
         val,
         btn("+", () => { cartHorse = true; }, {
-          disabled: mounted || cartHorse,
-          title: mounted ? "Already mounted" : "Add a horse to cart",
+          disabled: mounted || cartHorse || !freeStable,
+          title: mounted
+            ? "Already mounted"
+            : !freeStable
+              ? "No free stable — build/grow a hay field first (§9)"
+              : "Add a horse to cart",
         }),
       );
       sale.body.append(r);
@@ -263,7 +267,7 @@ export function createTownPanel(opts: {
     grid.append(sale.col, cartCol.col, storeCol.col, invCol.col);
 
     // Offer / Confirm -----------------------------------------------------
-    const ev = evaluateTownTrade(unit, storage, cart, cartHorse, offerUnit, offerStorage);
+    const ev = evaluateTownTrade(unit, storage, cart, cartHorse, offerUnit, offerStorage, freeStable);
     const footer = document.createElement("div");
     footer.className = "town-footer";
     const summary = document.createElement("span");
@@ -272,11 +276,11 @@ export function createTownPanel(opts: {
     const status = document.createElement("span");
     status.className = "town-status";
     if (!ev.ok && ev.reason) status.textContent = ev.reason;
-    else if (ev.ok && (ev.change.gold > 0 || ev.change.hay > 0)) {
-      const parts: string[] = [];
-      if (ev.change.gold > 0) parts.push(`${ev.change.gold} gold`);
-      if (ev.change.hay > 0) parts.push(`${ev.change.hay} hay`);
-      status.textContent = `Change to storage: ${parts.join(", ")}`;
+    else if (ev.ok) {
+      const parts = RESOURCE_TYPES
+        .filter((t) => (ev.change[t] ?? 0) > 0)
+        .map((t) => `${ev.change[t]} ${t}`);
+      if (parts.length > 0) status.textContent = `Change to storage: ${parts.join(", ")}`;
     }
     const confirm = btn("Confirm Trade", () => {
       enqueue({

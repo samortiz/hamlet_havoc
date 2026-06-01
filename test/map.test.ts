@@ -61,7 +61,7 @@ describe("map generation", () => {
     expect(seen.has("mountain")).toBe(true);
   });
 
-  it("assigns a rock type to every mountain tile, deterministically (T2)", () => {
+  it("assigns a rock type to every mountain tile, deterministically", () => {
     const a = generateMap(777);
     const b = generateMap(777);
     let mountains = 0;
@@ -77,7 +77,7 @@ describe("map generation", () => {
     expect(Object.keys(a.map.mountainType).length).toBe(mountains);
   });
 
-  it("mountainTypeAt falls back to stone for old saves with no entry (T2)", () => {
+  it("mountainTypeAt falls back to stone for old saves with no entry", () => {
     const map = generateMap(5).map;
     const fresh = { ...map, mountainType: {} };
     expect(mountainTypeAt(fresh, 0)).toBe("stone");

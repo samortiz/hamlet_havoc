@@ -11,10 +11,16 @@ import {
 } from "../config/index.js";
 import { seasonAt, seasonIndexAt } from "./season.js";
 import { makeBuilding, type Building, type BuildingKind } from "./buildings.js";
-import type { Enemy } from "./combat.js";
+import type { DamageEvent, Enemy, HealEvent } from "./combat.js";
+import {
+  chooseUpcomingEvent,
+  type ActiveEvent,
+  type EventCategory,
+  type UpcomingEvent,
+} from "./events.js";
 import type { Field } from "./fields.js";
 import { generateMap, HAMLET_CENTER, type GameMap, type TileCoord } from "./map.js";
-import { emptyPool, type ResourcePool } from "./resources.js";
+import { emptyPool, type ResourcePool, type ResourceType } from "./resources.js";
 import { makeWorker, type Unit } from "./units.js";
 
 // Bumped to 4: the board switched from a square 40×60 grid to a 40×40
@@ -23,14 +29,14 @@ import { makeWorker, type Unit } from "./units.js";
 // verbatim would have buildings landing in geometrically different places.
 // Rejected by deserialize().
 //
-// Previous bumps: 2 (M2 — fields/buildings/resources), 3 (M3 — build
+// Previous bumps: 2 (fields/buildings/resources), 3 (build
 // progress/occupants/equipment).
 //
-// M4 (seasons/upkeep) added no new persisted fields — the calendar is derived
+// Seasons/upkeep added no new persisted fields — the calendar is derived
 // from `tickCount` and upkeep/crop-loss/regrowth mutate existing state — so the
 // serialized shape is unchanged and the version stays at 4.
 //
-// Bumped to 5 for M5 (combat/town/horses): units gained `equipped`, `horseHp`,
+// Bumped to 5 for combat/town/horses: units gained `equipped`, `horseHp`,
 // and `attackCooldown`; GameState gained the `enemies` map and the `town` tile.
 // A v4 save lacks these, so it is rejected by deserialize().
 //
@@ -38,13 +44,47 @@ import { makeWorker, type Unit } from "./units.js";
 // `townStorage`, the pool of goods deposited at town (kept separate from
 // `resources` so it does not count against the hamlet storage cap). A v5 save
 // lacks it, so it is rejected by deserialize().
-// v7: per-tile `map.mountainType` (T2) — old saves lack it and are rejected.
-// v8: Building gains `spawning`/`spawnProgress` for Main Hall worker production (T5).
+// v7: per-tile `map.mountainType` — old saves lack it and are rejected.
+// v8: Building gains `spawning`/`spawnProgress` for Main Hall worker production.
 // v9: GameState gains `notifications` — the rolling event log surfaced to the
-// player when a unit starves/demotes or a horse dies (T7).
-export const SAVE_VERSION = 9;
+// player when a unit starves/demotes or a horse dies.
+// v10: enemy AI — `Enemy` gains `focusUnitId`/`path`/`node` for movement &
+// targeting. A v9 save's enemies lack these, so it is rejected by deserialize().
+// v11: end-of-year events — GameState gains the game `phase`, the announced
+// `upcomingEvent`, the resolving `activeEvent`, `yearsSinceAttack`, the
+// year-long `eventMods`, and run `stats`. A v10 save lacks these, so it is
+// rejected by deserialize().
+// v12: enemy loot — GameState gains `groundItems`, the loose resource stacks
+// dropped by killed enemies that a unit can walk over to collect (req §6.2). A
+// v11 save lacks it, so it is rejected by deserialize().
+// v13: water-predator lifecycle — `Enemy` gains `spawnTick` so a sea serpent /
+// kraken despawns one year after it surfaces (req §14, §17.3). A v12 save's
+// enemies lack it, so it is rejected by deserialize().
+// v14: deterministic year-end cadence — GameState swaps `yearsSinceAttack` for
+// `eventSchedule` (the remaining shuffled categories of the current 3-year
+// block, §16.0). A v13 save has the wrong shape, so it is rejected by
+// deserialize().
+// v15: tax flavours — a resolving tax `activeEvent` gains a `flavour` naming the
+// keyed demand formula (§16.2). A v14 save mid-tax lacks it, so it is rejected
+// by deserialize().
+// v16: rebuilt Misc library (§16.3) — the MiscEventKind set changed (new events,
+// dropped travellingSalesman/wanderingRecruits/banditShakedown) and a resolving
+// trade-dialog Misc `activeEvent` gains a `trade` state (item 31/32). A v15 save
+// may carry a now-unknown misc kind or lack `trade`, so it is rejected on load.
+// v17: hay deprecated as a resource (req §8) — it is removed from `RESOURCE_TYPES`,
+// so every `ResourcePool`/`Inventory` (the `resources`/`townStorage` pools and
+// each unit's `carrying`) drops its `hay` key. A v16 save still carries `hay`, so
+// it is rejected on load.
+// v18: tax payment is fully player-chosen (req §16.2.1) — the `tax` ActiveEvent
+// drops its auto-pay `remaining`/`autoGold` fields, carrying only `demand`.
+// v19: attacks are no longer modal (req §16.1) — an Attack stays in `playing`
+// (spawn + warning, fought live) instead of entering `endOfYearEvent`, so the
+// `attack` ActiveEvent variant is gone. A v18 save paused mid-attack would carry
+// an unresolvable `{phase:"endOfYearEvent", activeEvent:{category:"attack"}}`, so
+// it is rejected on load.
+export const SAVE_VERSION = 19;
 
-// Most recent notifications kept on the state (T7). The UI dedups by id and only
+// Most recent notifications kept on the state. The UI dedups by id and only
 // toasts ones it hasn't shown yet, so this just bounds save size — older entries
 // fall off the front once the cap is exceeded.
 export const MAX_NOTIFICATIONS = 12;
@@ -58,21 +98,74 @@ export interface EquipmentPool {
   shield: number;
 }
 
-// A player-facing event (T7). Emitted by the sim when something happens the
+// A player-facing event. Emitted by the sim when something happens the
 // player should know about but didn't directly order — a worker starving, a
 // unit demoted for unpaid upkeep, a horse lost. `id` is allocated from the same
 // monotonic entity counter so the UI can dedup and toast only new ones.
-export type NotificationKind = "death" | "demotion" | "horse";
+export type NotificationKind = "death" | "demotion" | "enemy";
 export interface GameNotification {
   id: number;
   tick: number;
   kind: NotificationKind;
   message: string;
+  // Optional world location the notice points at: set for enemy sightings
+  // so clicking the toast centres the camera on the combat. Absent for upkeep
+  // notices, which have no single place to jump to.
+  x?: number;
+  y?: number;
+}
+
+// Top-level game phase (req §21.1). The sim only advances normal play in
+// `playing`; a year-end event is a modal interruption (`endOfYearEvent`) that
+// suspends season time while it resolves; a loss flips it to `gameOver`. (The
+// req's `Intro`/`Paused` phases are loop/UI concerns: pause stops the loop from
+// calling update() at all.)
+export type GamePhase = "playing" | "endOfYearEvent" | "gameOver";
+
+// Year-long event modifiers (req §16.3). Set when the matching Misc event fires;
+// `festival`/`mildWinter` stay active for the coming year (cleared when the next
+// year-boundary event triggers); `harshUpkeep` is consumed at the next season end.
+export interface EventModifiers {
+  festival: boolean; // +25% gather, −25% build/craft/train this year
+  mildWinter: boolean; // skip winter fishing penalty + worker upkeep this year
+  harshUpkeep: boolean; // double the next end-of-season upkeep
+}
+
+// A loose stack of a single resource lying on a tile (req §6.2). Dropped when a
+// killed enemy's loot doesn't fit the killer's cart (or for water predators,
+// whose loot always surfaces on the attacker's tile); any unit walking over the
+// tile with carry room collects it. Id-based like every other entity (req §2.6).
+export interface GroundItem {
+  id: number;
+  x: number;
+  y: number;
+  resource: ResourceType;
+  qty: number;
+}
+
+// Run statistics surfaced on the game-over screen (req §21).
+export interface RunStats {
+  peakPopulation: number;
+  yearsSurvived: number; // year-end events successfully weathered
 }
 
 export interface GameState {
   version: number;
   tickCount: number;
+  // Game phase + the end-of-year event system (req §16, §21.1).
+  phase: GamePhase;
+  // The event announced for the *current* year, firing at its winter→spring
+  // boundary. Only its type is known until the event triggers (§16.0, §16.4).
+  upcomingEvent: UpcomingEvent;
+  // The event currently resolving while `phase === "endOfYearEvent"`; null
+  // otherwise. Carries the rolled magnitude + any player-choice state.
+  activeEvent: ActiveEvent | null;
+  // The categories remaining in the current year-end cadence block, already
+  // seeded-shuffled (§16.0). One is popped per year to set `upcomingEvent`; when
+  // it empties a fresh block is shuffled in. See chooseUpcomingEvent in events.ts.
+  eventSchedule: EventCategory[];
+  eventMods: EventModifiers;
+  stats: RunStats;
   // Seeded PRNG state (see rng.ts). Lives in state so saves stay deterministic.
   rngState: number;
   // Monotonic id source for entities.
@@ -81,9 +174,12 @@ export interface GameState {
   units: Record<number, Unit>;
   buildings: Record<number, Building>;
   fields: Record<number, Field>;
-  // Hostile units (req §6.1, §17). Stationary + injectable in M5; spawning and
-  // AI land in M6. Keyed by id like every other entity (req §2.6).
+  // Hostile units (req §6.1, §17). They have movement/targeting AI and
+  // spawning (mine goblins, fishing predators). Keyed by id (req §2.6).
   enemies: Record<number, Enemy>;
+  // Loose resource stacks on the ground (req §6.2), dropped by killed enemies and
+  // picked up by units walking over them. Keyed by id (req §2.6).
+  groundItems: Record<number, GroundItem>;
   resources: ResourcePool;
   equipment: EquipmentPool;
   // The town marketplace tile (req §18) — a fixed walkable location far from the
@@ -94,9 +190,16 @@ export interface GameState {
   // trades. Deliberately separate from `resources`: items stored here do *not*
   // count against the hamlet storage cap.
   townStorage: ResourcePool;
-  // Rolling player-facing event log (T7), capped at MAX_NOTIFICATIONS. Appended
+  // Rolling player-facing event log, capped at MAX_NOTIFICATIONS. Appended
   // by the sim (upkeep deaths/demotions); the HUD toasts new entries.
   notifications: GameNotification[];
+  // Combat damage toasts produced this step — the renderer floats a "-N"
+  // over each struck unit/enemy. Transient render-feed data: regenerated every
+  // step and stripped from saves (see persistence.ts), so it carries no history.
+  damageEvents: DamageEvent[];
+  // Heal toasts produced this step (req §6.2) — the renderer floats a green "+N"
+  // over each healed unit. Transient like damageEvents; stripped from saves.
+  healEvents: HealEvent[];
 }
 
 export function createInitialState(seed: number): GameState {
@@ -136,21 +239,39 @@ export function createInitialState(seed: number): GameState {
   const resources = emptyPool();
   resources.wheat = STARTING_WHEAT;
 
+  // Roll year 1's end-of-year event up front so it can be announced from the
+  // first frame (req §16.0, §16.4). Consumes the map-gen RNG state.
+  const [rngState, upcomingEvent, eventSchedule] = chooseUpcomingEvent(
+    gen.rngState,
+    1,
+    [],
+  );
+  const startingPop = workerTiles.length;
+
   return {
     version: SAVE_VERSION,
     tickCount: 0,
-    rngState: gen.rngState,
+    phase: "playing",
+    upcomingEvent,
+    activeEvent: null,
+    eventSchedule,
+    eventMods: { festival: false, mildWinter: false, harshUpkeep: false },
+    stats: { peakPopulation: startingPop, yearsSurvived: 0 },
+    rngState,
     nextEntityId,
     map: gen.map,
     units,
     buildings,
     fields: {},
     enemies: {},
+    groundItems: {},
     resources,
     equipment: { sword: 0, shield: 0 },
     town: gen.town,
     townStorage: emptyPool(),
     notifications: [],
+    damageEvents: [],
+    healEvents: [],
   };
 }
 

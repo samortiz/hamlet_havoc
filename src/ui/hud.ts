@@ -25,9 +25,10 @@ import {
   type Building,
   type BuildingKind,
 } from "../game/buildings.js";
-import { unitAttackRange, unitDefense } from "../game/combat.js";
+import { diceRange, unitAttackRange, unitDefense } from "../game/combat.js";
+import { upcomingIcon, upcomingLabel } from "../game/events.js";
 import { poolTotal, RESOURCE_TYPES, type ResourceType } from "../game/resources.js";
-import { deriveSeason, type GameState } from "../game/state.js";
+import { deriveSeason, type GameNotification, type GameState } from "../game/state.js";
 import { hasHorse, maxHp, type Order } from "../game/units.js";
 import type { View } from "./camera.js";
 
@@ -35,6 +36,10 @@ export interface HudCallbacks {
   onNew: () => void;
   onSave: () => void;
   onLoad: () => void;
+  // an enemy sighting pauses the game; clicking its toast jumps the camera
+  // to the combat (and unpauses, since the player is now looking at it).
+  onPause: () => void;
+  onJumpTo: (x: number, y: number) => void;
 }
 
 export interface Hud {
@@ -43,7 +48,6 @@ export interface Hud {
 }
 
 const RESOURCE_LABEL: Record<ResourceType, string> = {
-  hay: "Hay",
   wheat: "Wheat",
   wood: "Wood",
   stone: "Stone",
@@ -104,7 +108,7 @@ function pct(progress: number, total: number): number {
   return Math.min(100, Math.floor((progress / total) * 100));
 }
 
-// Building hover tooltip content (T10): name, health, and whatever stats apply
+// Building hover tooltip content: name, health, and whatever stats apply
 // to the kind — storage/housing contribution, in-progress craft/train/spawn, or
 // a mine's rolled yield.
 function describeBuilding(state: GameState, b: Building): { title: string; lines: string[] } {
@@ -130,7 +134,7 @@ function describeBuilding(state: GameState, b: Building): { title: string; lines
       if (b.trainTo) lines.push(`Training → ${b.trainTo} ${pct(b.trainProgress, TRAIN_TICKS)}%`);
       break;
     case "smithy":
-      if (b.craftItem) lines.push(`Crafting ${b.craftItem} ${pct(b.craftProgress, CRAFT_TICKS)}%`);
+      if (b.craftItem) lines.push(`Crafting ${b.craftItem} ${pct(b.craftProgress, CRAFT_TICKS[b.craftItem])}%`);
       break;
     case "mine": {
       const mineType = state.map.mineType[b.y * MAP_WIDTH + b.x];
@@ -147,12 +151,14 @@ function describeBuilding(state: GameState, b: Building): { title: string; lines
 export function createHud(cb: HudCallbacks): Hud {
   const seasonEl = el("hud-season");
   const timerEl = el("hud-timer");
+  const eventEl = el("hud-event");
   const pausedEl = el("hud-paused");
   const tickEl = el("hud-tick");
   const resourcesEl = el("hud-resources");
   const storageEl = el("hud-storage");
   const toastEl = el("hud-toast");
   const noticesEl = el("hud-notifications");
+  const combatAlertEl = el("hud-combat-alert");
   const popEl = el("hud-population");
   const equipEl = el("hud-equipment");
   const tooltipEl = el("unit-tooltip");
@@ -184,6 +190,18 @@ export function createHud(cb: HudCallbacks): Hud {
   el("btn-save").addEventListener("click", cb.onSave);
   el("btn-load").addEventListener("click", cb.onLoad);
 
+  // Combat alert: clicking it jumps to the gravest threat and dismisses it.
+  let combatJump: { x: number; y: number } | null = null;
+  let combatAlertTimer = 0;
+  // Whether an attack is currently ongoing (enemies present). Drives the
+  // one-shot toast: it re-arms only after the map is cleared of enemies.
+  let attackActive = false;
+  combatAlertEl.addEventListener("click", () => {
+    if (combatJump) cb.onJumpTo(combatJump.x, combatJump.y);
+    combatAlertEl.hidden = true;
+    window.clearTimeout(combatAlertTimer);
+  });
+
   let toastTimer = 0;
   function flash(message: string): void {
     toastEl.textContent = message;
@@ -192,20 +210,32 @@ export function createHud(cb: HudCallbacks): Hud {
     toastTimer = window.setTimeout(() => (toastEl.hidden = true), 1500);
   }
 
-  // Sim event popups (T7). The sim appends to state.notifications; we toast each
+  // Sim event popups. The sim appends to state.notifications; we toast each
   // one exactly once, tracking the highest id we've shown. Lazily initialised on
   // the first update so notifications already present in a loaded save (or the
   // initial state) aren't replayed as if they just happened.
   let lastNoticeId = -1;
   let noticesInitialised = false;
-  function pushNotice(message: string): void {
+  function pushNotice(note: GameNotification): void {
     const div = document.createElement("div");
     div.className = "hud-notice";
-    div.textContent = message;
+    div.textContent = note.message;
+    // an enemy notice carries the combat location — make its toast a button
+    // that recenters the camera there (the caller also unpauses).
+    const jump = note.kind === "enemy" && note.x !== undefined && note.y !== undefined;
+    if (jump) {
+      div.classList.add("clickable");
+      div.addEventListener("click", () => {
+        cb.onJumpTo(note.x as number, note.y as number);
+        div.remove();
+      });
+    }
     noticesEl.appendChild(div);
     // Fade out, then remove from the DOM so the stack doesn't grow unbounded.
-    window.setTimeout(() => div.classList.add("fading"), 5000);
-    window.setTimeout(() => div.remove(), 5600);
+    // Enemy notices linger longer so the player has time to act on them.
+    const life = jump ? 12000 : 5000;
+    window.setTimeout(() => div.classList.add("fading"), life);
+    window.setTimeout(() => div.remove(), life + 600);
   }
   function drainNotifications(state: GameState): void {
     const notes = state.notifications;
@@ -218,7 +248,7 @@ export function createHud(cb: HudCallbacks): Hud {
     for (const n of notes) {
       if (n.id <= lastNoticeId) continue;
       lastNoticeId = n.id;
-      pushNotice(n.message);
+      pushNotice(n);
     }
   }
 
@@ -236,8 +266,9 @@ export function createHud(cb: HudCallbacks): Hud {
     const title = u.kind.charAt(0).toUpperCase() + u.kind.slice(1);
     ttTitle.textContent = hasHorse(u) ? `${title} 🐴` : title;
     const horseHp = hasHorse(u) ? ` (+${u.horseHp} horse)` : "";
-    const atk = unitAttackRange(u);
-    ttHp.textContent = `HP ${u.hp}/${maxHp(u.kind)}${horseHp} · Atk ${atk.min}-${atk.max} · Def ${unitDefense(u)}`;
+    const atk = diceRange(unitAttackRange(u));
+    const def = diceRange(unitDefense(u));
+    ttHp.textContent = `HP ${u.hp}/${maxHp(u.kind)}${horseHp} · Atk ${atk.min}-${atk.max} · Def ${def.min}-${def.max}`;
     ttOrder.textContent = describeOrder(u.order);
 
     const items: string[] = [];
@@ -291,10 +322,50 @@ export function createHud(cb: HudCallbacks): Hud {
     buildingTooltipEl.hidden = false;
   }
 
+  // Bottom-centre combat alert: a one-shot toast raised when an attack begins —
+  // so an attack far from the camera is never missed — instead of pausing. It
+  // auto-hides after 5s, or immediately when clicked (which also jumps the
+  // camera). The click points at the enemy nearest the Main Hall (the gravest
+  // threat), falling back to the first enemy if the hall is gone. It re-arms
+  // only once the map is cleared, so a fresh wave raises it again.
+  function updateCombatAlert(state: GameState): void {
+    const enemies = Object.values(state.enemies);
+    if (enemies.length === 0) {
+      if (attackActive) {
+        attackActive = false;
+        combatAlertEl.hidden = true;
+        window.clearTimeout(combatAlertTimer);
+        combatJump = null;
+      }
+      return;
+    }
+    const hall = Object.values(state.buildings).find((b) => b.kind === "mainHall");
+    let target = enemies[0];
+    if (hall) {
+      let bestD = Infinity;
+      for (const e of enemies) {
+        const d = (e.x - hall.x) ** 2 + (e.y - hall.y) ** 2;
+        if (d < bestD) { bestD = d; target = e; }
+      }
+    }
+    // Keep the jump target current so a click (while the toast is up) points at
+    // the gravest threat, even though only the first frame raises the toast.
+    combatJump = { x: Math.round(target.x), y: Math.round(target.y) };
+    if (attackActive) return;
+    attackActive = true;
+    const n = enemies.length;
+    combatAlertEl.textContent = `⚔️ Under attack! ${n} ${n === 1 ? "enemy" : "enemies"} — click to view`;
+    combatAlertEl.hidden = false;
+    window.clearTimeout(combatAlertTimer);
+    combatAlertTimer = window.setTimeout(() => (combatAlertEl.hidden = true), 5000);
+  }
+
   function update(state: GameState, paused: boolean, view: View): void {
     const { season, year, secondsRemaining } = deriveSeason(state.tickCount);
     seasonEl.textContent = `${season}, Year ${year}`;
     timerEl.textContent = `${secondsRemaining}s`;
+    // Upcoming end-of-year event (req §16.4): icon + label, only the type known.
+    eventEl.textContent = `Next: ${upcomingIcon(state.upcomingEvent)} ${upcomingLabel(state.upcomingEvent)}`;
     tickEl.textContent = `tick ${state.tickCount}`;
     pausedEl.hidden = !paused;
 
@@ -312,6 +383,7 @@ export function createHud(cb: HudCallbacks): Hud {
     equipEl.textContent = `Sword:${state.equipment.sword} · Shield:${state.equipment.shield}`;
 
     drainNotifications(state);
+    updateCombatAlert(state);
     updateTooltip(state, view);
     updateBuildingTooltip(state, view);
   }

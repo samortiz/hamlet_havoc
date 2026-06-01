@@ -1,4 +1,4 @@
-// Buildings (req §7). M3 brings the full construction system: every building
+// Buildings (req §7). The construction system: every building
 // is placed via a `build` command, accumulates progress while workers build it,
 // and can be repaired or demolished. Smithy and barracks also carry per-step
 // state (craft progress, training progress) for the workflows in §7.2/§7.3.
@@ -51,7 +51,7 @@ export interface Building {
   // Barracks: who is training, into what, and how far along (§7.3).
   trainTo: TrainTarget | null;
   trainProgress: number;
-  // Main Hall: producing a new worker (T5). `spawning` true while a worker is
+  // Main Hall: producing a new worker. `spawning` true while a worker is
   // being raised; `spawnProgress` accumulates ticks toward WORKER_SPAWN_TICKS.
   // Only the Main Hall uses these; every other building leaves them at defaults.
   spawning: boolean;

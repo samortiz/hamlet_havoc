@@ -241,7 +241,7 @@ body {
   font-size: 14px;
 }
 
-/* Sim event popups (T7): a stack of warning banners under the top HUD that
+/* Sim event popups: a stack of warning banners under the top HUD that
    fade out on their own. Drawn in a warning red/gold so a lost unit is hard
    to miss. */
 #hud-notifications {
@@ -270,6 +270,43 @@ body {
 }
 .hud-notice.fading {
   opacity: 0;
+}
+/* Enemy-sighting toasts are clickable (jump to the combat). The container
+   is pointer-events:none, so re-enable hits on these and flag them affordant. */
+.hud-notice.clickable {
+  pointer-events: auto;
+  cursor: pointer;
+  border-left-color: var(--gold);
+}
+.hud-notice.clickable:hover {
+  background: rgba(78, 32, 26, 0.97);
+}
+
+/* Persistent combat alert: a bottom-centre banner shown while any
+   enemy is on the map, so an attack is never missed even off-screen. Clickable
+   to jump the camera to the fight; replaces the old pause-on-sighting. */
+#hud-combat-alert {
+  position: absolute;
+  bottom: 64px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 8px 20px;
+  background: rgba(120, 28, 22, 0.95);
+  border: 2px solid var(--gold);
+  border-radius: 6px;
+  color: #ffe7a3;
+  font-size: 15px;
+  font-weight: 700;
+  pointer-events: auto;
+  cursor: pointer;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.6);
+  z-index: 25;
+}
+#hud-combat-alert[hidden] {
+  display: none;
+}
+#hud-combat-alert:hover {
+  background: rgba(150, 40, 32, 0.97);
 }
 
 #hud-debug {
@@ -440,4 +477,136 @@ body {
 .town-confirm {
   font-weight: 700;
   border-color: var(--gold) !important;
+}
+
+/* Upcoming end-of-year event chip in the top bar (req §16.4, §19.1) */
+#hud-event {
+  color: var(--gold);
+  font-weight: 600;
+}
+
+/* Year-end Tax/Misc modal + game-over screen (req §16.4, §21). The overlay fills
+   the viewport, dims the world, and captures clicks (a true modal). Attacks are
+   fought live and do not use this overlay — only a HUD warning marks them. */
+/* The explicit display below overrides the UA `[hidden]` rule, so restore it
+   here — otherwise the empty overlay renders (and blocks input) during play. */
+#event-overlay[hidden] {
+  display: none;
+}
+
+#event-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: auto;
+  background: rgba(12, 16, 9, 0.62);
+}
+
+#event-dialog {
+  pointer-events: auto;
+  min-width: 320px;
+  max-width: 560px;
+  max-height: 80vh;
+  overflow-y: auto;
+  padding: 18px 22px;
+  background: rgba(28, 35, 22, 0.97);
+  border: 2px solid var(--gold);
+  border-radius: 8px;
+  color: var(--parchment);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+}
+
+.event-title {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--gold);
+  margin-bottom: 10px;
+}
+
+.event-body {
+  font-size: 14px;
+  line-height: 1.45;
+  margin-bottom: 8px;
+}
+
+.event-hint {
+  font-size: 12px;
+  opacity: 0.8;
+  margin-bottom: 10px;
+}
+
+.event-status {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--gold);
+  margin: 8px 0;
+}
+
+.event-goods,
+.event-buildings,
+.event-offers {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 8px 0;
+}
+
+/* Trade-dialog offers (§16.3) can be a long list (Trader); cap the height so the
+   modal stays on screen and scrolls instead. */
+.event-offers {
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.event-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.event-row span:first-child {
+  flex: 1;
+}
+
+.event-offer {
+  min-width: 18px;
+  text-align: center;
+  font-weight: 600;
+}
+
+.event-footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+#event-dialog button {
+  font: inherit;
+  font-size: 13px;
+  color: var(--parchment);
+  background: rgba(44, 55, 33, 0.9);
+  border: 1px solid rgba(212, 175, 55, 0.45);
+  border-radius: 3px;
+  padding: 4px 12px;
+  cursor: pointer;
+}
+
+#event-dialog button:hover {
+  background: var(--brown-dark);
+  border-color: var(--gold);
+}
+
+#event-dialog button.disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+#event-dialog button.event-selected {
+  border-color: var(--gold);
+  background: var(--brown-dark);
 }

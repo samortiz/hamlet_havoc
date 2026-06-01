@@ -1,4 +1,4 @@
-// Hall / storage loading interface (T9). A modal panel — styled like the town
+// Hall / storage loading interface. A modal panel — styled like the town
 // marketplace — that opens when the player selects a built storage building
 // (Main Hall, Barn, …) while a unit is standing on or next to it. It lets the
 // player:
@@ -28,7 +28,6 @@ export interface HallPanel {
 }
 
 const RESOURCE_LABEL: Record<ResourceType, string> = {
-  hay: "Hay",
   wheat: "Wheat",
   wood: "Wood",
   stone: "Stone",
@@ -57,7 +56,7 @@ export function createHallPanel(opts: {
   let lastBuildingId: number | null = null;
   let lastSig = "";
 
-  // The selected built storage building, if any (T9 opens on Main Hall / Barn).
+  // The selected built storage building, if any (opens on Main Hall / Barn).
   function activeBuilding(state: GameState, view: View): Building | null {
     for (const id of view.selectedBuildings) {
       const b = state.buildings[id];
@@ -255,6 +254,11 @@ export function createHallPanel(opts: {
     if (selId !== lastBuildingId) {
       if (lastBuildingId !== null) dismissed.delete(lastBuildingId);
       lastBuildingId = selId;
+      // the panel auto-opens only for a unit already present when the
+      // building is selected. If none is there at selection time, suppress it
+      // until the player reselects — so a worker spawned by (or returning to)
+      // an already-selected Main Hall does not pop the dialog open.
+      if (building && !activeUnit(state, building, view)) dismissed.add(building.id);
     }
     if (!building || dismissed.has(building.id)) {
       hide();

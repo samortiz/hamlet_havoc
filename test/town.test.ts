@@ -1,6 +1,6 @@
-// M5 — Town & Horses (req §9, §18). Headless sim tests for the marketplace
+// Town & Horses (req §9, §18). Headless sim tests for the marketplace
 // (placement, value-based trade with change, horse purchase) and mounts (carry
-// bonus, double speed, season upkeep).
+// bonus, double speed, buffer HP, hay-field stable capacity).
 
 import { describe, expect, it } from "vitest";
 import {
@@ -10,6 +10,7 @@ import {
   TICKS_PER_SEASON,
   WORKER_CARRY_CAP,
 } from "../src/config/index.js";
+import { makeField } from "../src/game/fields.js";
 import { hexDistance, hexNeighbors } from "../src/game/hex.js";
 import { HAMLET_CENTER, isWalkable, tileAt } from "../src/game/map.js";
 import { createInitialState, type GameState } from "../src/game/state.js";
@@ -25,6 +26,17 @@ function firstUnitId(s: GameState): number {
 }
 function setUnit(s: GameState, id: number, patch: Partial<Unit>): GameState {
   return { ...s, units: { ...s.units, [id]: { ...s.units[id], ...patch } } };
+}
+// A mature hay field stables 2 horses (req §9). Horse purchases are blocked
+// without free stable capacity, so seed `n` fields' worth of slots.
+function withHayFields(s: GameState, n = 1): GameState {
+  const fields = { ...s.fields };
+  let nextEntityId = s.nextEntityId;
+  for (let i = 0; i < n; i++) {
+    const id = nextEntityId++;
+    fields[id] = { ...makeField(id, HAMLET_CENTER.x + i, HAMLET_CENTER.y, "hay"), stage: "hayMature" };
+  }
+  return { ...s, nextEntityId, fields };
 }
 // A walkable tile next to the town, so a trade resolves after a short walk.
 function tileByTown(s: GameState): { x: number; y: number } {
@@ -44,40 +56,55 @@ describe("town placement (req §18)", () => {
 });
 
 describe("trading (req §18, §8)", () => {
-  it("sells resources at value and returns surplus as gold + hay change", () => {
+  it("sells resources at value and returns surplus as gold change", () => {
     let s = createInitialState(2024);
     const id = firstUnitId(s);
     const spot = tileByTown(s);
-    // 4 meat = 20 value → with no purchase, change is 20 → 2 gold + 0 hay.
-    s = setUnit(s, id, { x: spot.x, y: spot.y, carrying: { meat: 4 } });
-    s = update(s, [{ type: "trade", unitIds: [id], sell: { meat: 4 }, buy: {}, buyHorse: false }], 1);
+    // 5 meat = 20 value → with no purchase, change is 20 → 2 gold.
+    s = setUnit(s, id, { x: spot.x, y: spot.y, carrying: { meat: 5 } });
+    s = update(s, [{ type: "trade", unitIds: [id], sell: { meat: 5 }, buy: {}, buyHorse: false }], 1);
     s = advance(s, 60);
 
     const u = s.units[id];
     expect(u.order.type).toBe("idle");
     expect(u.carrying.meat ?? 0).toBe(0);
     expect(u.carrying.gold ?? 0).toBe(2);
-    expect(u.carrying.hay ?? 0).toBe(0);
   });
 
-  it("returns a sub-coin remainder as hay so value is conserved", () => {
+  it("pays a sub-coin remainder in wood and wheat change", () => {
     let s = createInitialState(2024);
     const id = firstUnitId(s);
     const spot = tileByTown(s);
-    // 5 wheat = 10 value, buy 1 stone (4) → change 6 → 0 gold + 6 hay.
+    // 5 wheat = 10 value, buy 1 stone (3) → surplus 7 → 1 wood (3) + 2 wheat (4).
     s = setUnit(s, id, { x: spot.x, y: spot.y, carrying: { wheat: 5 } });
     s = update(s, [{ type: "trade", unitIds: [id], sell: { wheat: 5 }, buy: { stone: 1 }, buyHorse: false }], 1);
     s = advance(s, 60);
 
     const u = s.units[id];
-    expect(u.carrying.wheat ?? 0).toBe(0);
     expect(u.carrying.stone ?? 0).toBe(1);
     expect(u.carrying.gold ?? 0).toBe(0);
-    expect(u.carrying.hay ?? 0).toBe(6);
+    expect(u.carrying.wood ?? 0).toBe(1);
+    expect(u.carrying.wheat ?? 0).toBe(2);
+  });
+
+  it("forfeits an indivisible remainder of exactly 1", () => {
+    let s = createInitialState(2024);
+    const id = firstUnitId(s);
+    const spot = tileByTown(s);
+    // 2 wheat = 4 value, buy 1 wood (3) → surplus 1, which no resource can pay.
+    s = setUnit(s, id, { x: spot.x, y: spot.y, carrying: { wheat: 2 } });
+    s = update(s, [{ type: "trade", unitIds: [id], sell: { wheat: 2 }, buy: { wood: 1 }, buyHorse: false }], 1);
+    s = advance(s, 60);
+
+    const u = s.units[id];
+    expect(u.carrying.wood ?? 0).toBe(1);
+    expect(u.carrying.wheat ?? 0).toBe(0);
+    expect(u.carrying.gold ?? 0).toBe(0);
   });
 
   it("refuses a trade the unit cannot pay for", () => {
     let s = createInitialState(2024);
+    s = withHayFields(s); // stable capacity available, so affordability is what bites
     const id = firstUnitId(s);
     const spot = tileByTown(s);
     s = setUnit(s, id, { x: spot.x, y: spot.y, carrying: { wheat: 1 } }); // value 2
@@ -150,11 +177,11 @@ describe("town interface — value-checked trades (req §18)", () => {
     let s = createInitialState(2024);
     const id = firstUnitId(s);
     s = setUnit(s, id, { x: s.town.x, y: s.town.y, carrying: { wheat: 1 } }); // value 2
-    s = { ...s, townStorage: { ...s.townStorage, hay: 5 } };
+    s = { ...s, townStorage: { ...s.townStorage, wood: 5 } };
     s = update(s, [{
       type: "townTrade",
       unitId: id,
-      cart: { meat: 1 }, // value 5
+      cart: { meat: 1 }, // value 4
       buyHorse: false,
       offerUnit: { wheat: 1 },
       offerStorage: {},
@@ -162,31 +189,31 @@ describe("town interface — value-checked trades (req §18)", () => {
 
     expect(s.units[id].carrying.meat ?? 0).toBe(0); // not bought
     expect(s.units[id].carrying.wheat ?? 0).toBe(1); // offer untouched
-    expect(s.townStorage.hay).toBe(5); // storage untouched
+    expect(s.townStorage.wood).toBe(5); // storage untouched
   });
 
-  it("returns surplus value to town storage as change", () => {
+  it("returns whole-coin surplus value to town storage as gold change", () => {
     let s = createInitialState(2024);
     const id = firstUnitId(s);
-    // Offer 1 meat (value 5) for 1 wheat (value 2): 3 surplus → 0 gold + 3 hay.
-    s = setUnit(s, id, { x: s.town.x, y: s.town.y, carrying: { meat: 1 } });
+    // Offer 3 meat (value 12) for 1 wheat (value 2): 10 surplus → 1 gold change.
+    s = setUnit(s, id, { x: s.town.x, y: s.town.y, carrying: { meat: 3 } });
     s = update(s, [{
       type: "townTrade",
       unitId: id,
       cart: { wheat: 1 },
       buyHorse: false,
-      offerUnit: { meat: 1 },
+      offerUnit: { meat: 3 },
       offerStorage: {},
     }], 1);
 
     expect(s.units[id].carrying.wheat ?? 0).toBe(1);
     expect(s.units[id].carrying.meat ?? 0).toBe(0);
-    expect(s.townStorage.gold).toBe(0);
-    expect(s.townStorage.hay).toBe(3); // value-exact change
+    expect(s.townStorage.gold).toBe(1); // 10 surplus value = 1 gold
   });
 
   it("can buy a horse paying entirely from town storage", () => {
     let s = createInitialState(2024);
+    s = withHayFields(s);
     const id = firstUnitId(s);
     s = setUnit(s, id, { x: s.town.x, y: s.town.y, carrying: {} });
     s = { ...s, townStorage: { ...s.townStorage, gold: 2 } }; // 2 gold = 20 value
@@ -227,16 +254,49 @@ describe("town interface — value-checked trades (req §18)", () => {
 describe("horses (req §9)", () => {
   it("a unit can buy a horse at town by selling carried goods", () => {
     let s = createInitialState(2024);
+    s = withHayFields(s);
     const id = firstUnitId(s);
     const spot = tileByTown(s);
-    s = setUnit(s, id, { x: spot.x, y: spot.y, carrying: { meat: 4 } }); // 20 value
-    s = update(s, [{ type: "trade", unitIds: [id], sell: { meat: 4 }, buy: {}, buyHorse: true }], 1);
+    s = setUnit(s, id, { x: spot.x, y: spot.y, carrying: { meat: 5 } }); // 20 value
+    s = update(s, [{ type: "trade", unitIds: [id], sell: { meat: 5 }, buy: {}, buyHorse: true }], 1);
     s = advance(s, 60);
 
     const u = s.units[id];
     expect(hasHorse(u)).toBe(true);
     expect(u.horseHp).toBe(HORSE_BONUS_HP);
     expect(u.carrying.meat ?? 0).toBe(0); // spent exactly on the horse
+  });
+
+  it("a horse adds 10 buffer HP (req §9)", () => {
+    expect(HORSE_BONUS_HP).toBe(10);
+  });
+
+  it("cannot buy a horse with no free hay-field stable capacity (req §9)", () => {
+    // No hay fields → no stable → purchase is blocked even when affordable.
+    let s = createInitialState(2024);
+    const id = firstUnitId(s);
+    const spot = tileByTown(s);
+    s = setUnit(s, id, { x: spot.x, y: spot.y, carrying: { meat: 4 } }); // 20 value
+    s = update(s, [{ type: "trade", unitIds: [id], sell: {}, buy: {}, buyHorse: true }], 1);
+    s = advance(s, 60);
+    expect(hasHorse(s.units[id])).toBe(false);
+    expect(s.units[id].carrying.meat ?? 0).toBe(4); // nothing sold, no horse
+  });
+
+  it("blocks the horse once every stable slot is taken (req §9)", () => {
+    // One mature hay field stables 2 horses. With two mounted units already, a
+    // third unit cannot buy a horse.
+    let s = createInitialState(2024);
+    s = withHayFields(s, 1); // capacity 2
+    const ids = Object.keys(s.units).map(Number);
+    s = setUnit(s, ids[0], { horseHp: HORSE_BONUS_HP });
+    s = setUnit(s, ids[1], { horseHp: HORSE_BONUS_HP });
+    const buyer = ids[2];
+    const spot = tileByTown(s);
+    s = setUnit(s, buyer, { x: spot.x, y: spot.y, horseHp: 0, carrying: { meat: 4 } });
+    s = update(s, [{ type: "trade", unitIds: [buyer], sell: {}, buy: {}, buyHorse: true }], 1);
+    s = advance(s, 60);
+    expect(hasHorse(s.units[buyer])).toBe(false);
   });
 
   it("a mount adds carry capacity", () => {
@@ -268,22 +328,14 @@ describe("horses (req §9)", () => {
     expect(riderDist).toBeGreaterThan(footDist * 1.5); // ~2× before path bends
   });
 
-  it("horse upkeep is paid in hay each season; an unfed horse dies", () => {
-    // Fed: plenty of hay (and meat for the workers) → horse survives, hay spent.
-    let fed = createInitialState(2024);
-    const fid = firstUnitId(fed);
-    fed = { ...fed, resources: { ...fed.resources, hay: 10, meat: 999, wheat: 0 } };
-    fed = setUnit(fed, fid, { horseHp: HORSE_BONUS_HP });
-    fed = advance(fed, TICKS_PER_SEASON);
-    expect(fed.units[fid].horseHp).toBe(HORSE_BONUS_HP);
-    expect(fed.resources.hay).toBe(8); // 2 hay consumed
-
-    // Starved: no hay or wheat (workers fed by meat) → the horse dies.
-    let starved = createInitialState(2024);
-    const sid = firstUnitId(starved);
-    starved = { ...starved, resources: { ...starved.resources, hay: 0, wheat: 0, meat: 999 } };
-    starved = setUnit(starved, sid, { horseHp: HORSE_BONUS_HP });
-    starved = advance(starved, TICKS_PER_SEASON);
-    expect(starved.units[sid].horseHp).toBe(0);
+  it("horses have no per-season upkeep — a horse survives a starved season (§9)", () => {
+    // No wheat at all, workers fed by meat: the horse is never billed and
+    // keeps its buffer HP across the season boundary.
+    let s = createInitialState(2024);
+    const id = firstUnitId(s);
+    s = { ...s, resources: { ...s.resources, wheat: 0, meat: 999 } };
+    s = setUnit(s, id, { horseHp: HORSE_BONUS_HP });
+    s = advance(s, TICKS_PER_SEASON);
+    expect(s.units[id].horseHp).toBe(HORSE_BONUS_HP);
   });
 });
