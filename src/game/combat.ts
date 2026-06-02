@@ -29,7 +29,7 @@ import { findPath, findWaterPath } from "./pathfinding.js";
 import { inBounds, isWalkable, tileAt, type GameMap, type TileCoord } from "./map.js";
 import { rngInt } from "./rng.js";
 import { carriedTotal, type Inventory, type ResourceType } from "./resources.js";
-import { carryCap, type Unit } from "./units.js";
+import { canCarryResource, carryCap, type Unit } from "./units.js";
 import type { GroundItem } from "./state.js";
 
 // The six enemy kinds (req §6.1). Land enemies (giant spider, goblin, goblin
@@ -273,7 +273,8 @@ function dropLoot(
     let remaining = d.qty;
     // Water loot is never auto-pocketed (req §6.2: it surfaces on the attacker's
     // tile); land loot fills the killer's cart first, then spills to the ground.
-    if (!water) {
+    // A captain only pockets gold/diamond (§6.1); the rest drops for a worker.
+    if (!water && canCarryResource(killer, d.resource)) {
       const room = Math.max(0, cap - carriedTotal(carrying));
       const taken = Math.min(room, remaining);
       if (taken > 0) {

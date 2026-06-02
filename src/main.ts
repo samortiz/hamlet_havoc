@@ -3,7 +3,13 @@
 // render loop. Pause is a loop concern: it stops stepping the sim, but camera
 // movement and rendering continue.
 
-import { AUTOSAVE_TICKS, SAVE_KEY, TICKS_PER_SECOND } from "./config/index.js";
+import {
+  AUTOSAVE_TICKS,
+  DEFAULT_SPEED_INDEX,
+  GAME_SPEEDS,
+  SAVE_KEY,
+  TICKS_PER_SECOND,
+} from "./config/index.js";
 import type { Command } from "./game/commands.js";
 import { deserialize, serialize } from "./game/persistence.js";
 import { createInitialState } from "./game/state.js";
@@ -52,6 +58,19 @@ function main(): void {
   let paused = false;
   let lastAutosaveTick = 0;
   const commandQueue: Command[] = [];
+
+  // Game speed (req §15.4). A loop-level multiplier on how fast sim time
+  // accumulates — ¼× through 4×. Not simulation state, so it's never saved.
+  let speedIndex = DEFAULT_SPEED_INDEX;
+  const getSpeed = (): number => GAME_SPEEDS[speedIndex];
+  function setSpeed(s: number): void {
+    const i = GAME_SPEEDS.indexOf(s as (typeof GAME_SPEEDS)[number]);
+    if (i >= 0) speedIndex = i;
+  }
+  // Step to the next/previous speed (bracket-key shortcuts), clamped to the ends.
+  function cycleSpeed(dir: -1 | 1): void {
+    speedIndex = Math.max(0, Math.min(GAME_SPEEDS.length - 1, speedIndex + dir));
+  }
 
   // LocalStorage persistence (req §2.5). One slot shared by autosave and the
   // manual Save button; auto-loaded on startup so state survives a reload.
@@ -103,6 +122,7 @@ function main(): void {
       controls.centerOn({ x, y });
       paused = false;
     },
+    onSetSpeed: setSpeed,
   });
 
   // Resume the last session if a valid save exists (req §2.5).
@@ -124,6 +144,7 @@ function main(): void {
     getState: () => state,
     enqueue: (cmd) => commandQueue.push(cmd),
     onTogglePause: () => (paused = !paused),
+    onCycleSpeed: cycleSpeed,
     actionPanel: actionPanelEl,
   });
 
@@ -177,7 +198,10 @@ function main(): void {
     // keeps stepping — update() pauses the whole world internally while the modal
     // is open, but still processes the tax/acknowledge commands sent from it.
     if (!paused && state.phase !== "gameOver") {
-      accumulatorMs += frameMs;
+      // Game speed (req §15.4): scale how much sim time this frame contributes.
+      // At 4× the accumulator fills four times as fast (more steps per frame);
+      // at ¼× a quarter as fast. MAX_FRAME_MS still bounds the catch-up.
+      accumulatorMs += frameMs * getSpeed();
       while (accumulatorMs >= STEP_MS) {
         const commands = commandQueue.splice(0, commandQueue.length);
         state = update(state, commands, 1);
@@ -194,7 +218,7 @@ function main(): void {
 
     const view = controls.getView();
     renderer.render(state, view);
-    hud.update(state, paused, view);
+    hud.update(state, paused, view, getSpeed());
     townPanel.update(state);
     hallPanel.update(state, view);
     eventOverlay.update(state);

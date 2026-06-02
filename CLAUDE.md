@@ -63,7 +63,7 @@ src/
     resources.ts     — resource types, trade values, pool/inventory helpers
     buildings.ts     — building kinds, storage, repair cost, nearest-storage lookup
     combat.ts        — enemy entities (goblin/serpent/kraken) + the §17.1 resolver (adjacency, roll−defense, horse absorption)
-    fields.ts        — farm + hay field tile features (ploughed/planted/grown, hayBuilding/hayMature)
+    fields.ts        — farm + stables tile features (ploughed/planted/grown, stablesBuilding/stablesMature)
     actions.ts       — order state machines (move/gather/field/build/operate/attack/trade) + placement/cost/housing/trade helpers
     commands.ts      — Command union (the only input→sim channel)
     update.ts        — stateless step: commands→orders, advance units, advance buildings, resolve combat, grow crops
@@ -143,7 +143,7 @@ Run both with `npm run test:all`.
 
 Keyboard/mouse bindings and the color palette are specified in req §20 and §3.1
 and implemented in `controls.ts` / `config/index.ts` (`COLORS`). In short: digits
-1–6 enter placement mode (House/Barn/Smithy/Barracks/Mine/Hay); F enters plough
+1–6 enter placement mode (House/Barn/Smithy/Barracks/Mine/Stables); F enters plough
 mode (then click the target cell — Plant/Harvest are action-panel buttons); X/R
 demolish/repair the selected building; K/L craft sword/shield; T trains; C cancels;
 Space pauses; Esc cancels placement/field-mode/selection. Placement and field

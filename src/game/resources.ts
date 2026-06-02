@@ -3,7 +3,7 @@
 // the town/tax systems.
 
 // Hay is intentionally absent: it is not a stored or tradeable resource (req
-// §8/§9). Hay *fields* are a tile feature that only provide horse stabling
+// §8/§9). Stables are a tile feature that only provide horse stabling
 // capacity (see `fields.ts`); they produce nothing.
 export const RESOURCE_TYPES = [
   "wheat",

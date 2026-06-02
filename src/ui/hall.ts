@@ -70,7 +70,7 @@ export function createHallPanel(opts: {
   function activeUnit(state: GameState, building: Building, view: View): Unit | null {
     const near: Unit[] = [];
     for (const u of Object.values(state.units)) {
-      if (u.kind === "captain") continue; // captains carry nothing
+      if (u.kind === "captain") continue; // hall load/unload is non-captain only (req §6.4)
       if (u.insideBuildingId !== null) continue;
       if (isUnitAtBuilding(u, building)) near.push(u);
     }

@@ -20,6 +20,7 @@ import {
 import { isBuilt, type Building, type BuildingKind } from "../game/buildings.js";
 import type { FieldStage } from "../game/fields.js";
 import {
+  hexNeighbors,
   hexToPixel,
   pixelToHex,
   HEX_HEIGHT,
@@ -32,7 +33,18 @@ import { carriedTotal, RESOURCE_TYPES, type ResourceType } from "../game/resourc
 import type { GameState } from "../game/state.js";
 import { hasHorse, maxHp, type FieldAction, type GatherResource, type Order } from "../game/units.js";
 import type { View } from "../ui/camera.js";
-import { buildingSprite, terrainSprite, unitSprite } from "./sprites.js";
+import { buildingSprite, terrainSprite, townSprite, unitSprite, type TownSpriteKey } from "./sprites.js";
+
+// The six town-ring decorations (req §18), one per hex neighbour of the market,
+// assigned by neighbour index so a given town always looks the same.
+const TOWN_RING_KEYS: readonly TownSpriteKey[] = [
+  "church",
+  "house",
+  "blacksmith",
+  "windmill",
+  "tower",
+  "cabin",
+];
 
 const RESOURCE_COLOR: Record<ResourceType, string> = {
   wheat: COLORS.resourceWheat,
@@ -102,8 +114,8 @@ const FIELD_COLOR: Record<FieldStage, string> = {
   ploughed: COLORS.fieldPloughed,
   planted: COLORS.fieldPlanted,
   grown: COLORS.fieldGrown,
-  hayBuilding: COLORS.hayBuilding,
-  hayMature: COLORS.hayMature,
+  stablesBuilding: COLORS.stablesBuilding,
+  stablesMature: COLORS.stablesMature,
 };
 
 // Parse "#rrggbb" → [r,g,b]; linear-interpolate two such colours by t∈[0,1].
@@ -502,17 +514,42 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
       }
     }
 
-    // Town marketplace (req §18): a fixed gold marker far from the Main Hall.
+    // Town marketplace (req §18): a 7-tile hex flower far from the Main Hall —
+    // a central market plus six surrounding buildings so it reads as a town.
     {
+      // Faint gold ground tint across the whole flower marks the reserved area.
+      for (const t of [state.town, ...hexNeighbors(state.town.x, state.town.y)]) {
+        if (tileAt(state.map, t.x, t.y) === "water") continue;
+        const { px, py } = hexToPixel(t.x, t.y);
+        c.globalAlpha = 0.18;
+        fillHex(px, py, HEX_SIZE * 0.92, COLORS.goldDim);
+        c.globalAlpha = 1;
+      }
+      // Ring buildings, one per neighbour (skip water so nothing floats on it).
+      const neighbours = hexNeighbors(state.town.x, state.town.y);
+      for (let i = 0; i < neighbours.length; i++) {
+        const t = neighbours[i];
+        if (tileAt(state.map, t.x, t.y) === "water") continue;
+        const sprite = townSprite(TOWN_RING_KEYS[i % TOWN_RING_KEYS.length]);
+        const { px, py } = hexToPixel(t.x, t.y);
+        if (sprite) drawSpriteAt(sprite, px, py);
+      }
+      // Central market: the sprite if loaded, otherwise the old gold marker.
       const { px, py } = hexToPixel(state.town.x, state.town.y);
-      const size = HEX_SIZE * 0.7;
-      fillHex(px, py, size, COLORS.goldDim);
-      strokeHex(px, py, size, COLORS.gold, 2);
+      const market = townSprite("market");
+      if (market) {
+        drawSpriteAt(market, px, py);
+      } else {
+        const size = HEX_SIZE * 0.7;
+        fillHex(px, py, size, COLORS.goldDim);
+        strokeHex(px, py, size, COLORS.gold, 2);
+      }
+      // "Town" banner above the market so the marketplace is easy to find.
       c.fillStyle = COLORS.buildingLabel;
-      c.font = `bold ${Math.round(HEX_SIZE * 0.4)}px system-ui, sans-serif`;
+      c.font = `bold ${Math.round(HEX_SIZE * 0.32)}px system-ui, sans-serif`;
       c.textAlign = "center";
       c.textBaseline = "middle";
-      c.fillText("Town", px, py);
+      c.fillText("Town", px, py - HEX_SIZE * 0.7);
     }
 
     // Loose loot on the ground (req §6.2): a small resource-coloured pouch with
@@ -535,6 +572,31 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
       c.fillText(String(g.qty), px, gy);
     }
 
+    // Riderless horses (req §9): a brown mount glyph standing on its tile,
+    // waiting at (or trotting to) a Stables until a unit mounts it again.
+    for (const h of Object.values(state.horses)) {
+      const { px, py } = hexToPixel(h.x, h.y);
+      const by = py + HEX_SIZE * 0.18;
+      const rx = HEX_SIZE * 0.4;
+      const ry = HEX_SIZE * 0.2;
+      // body
+      c.beginPath();
+      c.ellipse(px, by, rx, ry, 0, 0, Math.PI * 2);
+      c.fillStyle = COLORS.brownDark;
+      c.fill();
+      c.lineWidth = 1.5;
+      c.strokeStyle = COLORS.unitOutline;
+      c.stroke();
+      // head + neck, up and to the right
+      c.beginPath();
+      c.arc(px + rx * 0.85, by - ry * 1.4, HEX_SIZE * 0.12, 0, Math.PI * 2);
+      c.fillStyle = COLORS.brownLight;
+      c.fill();
+      c.lineWidth = 1.5;
+      c.strokeStyle = COLORS.unitOutline;
+      c.stroke();
+    }
+
     // Enemies (req §6.1, §17): red discs with an HP pip.
     for (const e of Object.values(state.enemies)) {
       const { px, py } = hexToPixel(e.x, e.y);
@@ -550,7 +612,7 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
       c.font = `bold ${Math.round(HEX_SIZE * 0.4)}px system-ui, sans-serif`;
       c.textAlign = "center";
       c.textBaseline = "middle";
-      c.fillText(String(e.hp), px, py);
+      c.fillText(String(Math.round(e.hp)), px, py);
     }
 
     // Placement ghost preview (req §7.1, while in placement mode).

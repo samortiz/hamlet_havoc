@@ -40,6 +40,28 @@ const UNIT_SPRITE_FILE: Partial<Record<UnitKind, string>> = {
   soldier: "unit_soldier.png",
 };
 
+// Town decoration sprites (req §18). The market sits on the centre tile; the six
+// surrounding tiles each get one of these so the marketplace reads as a small
+// town. Keyed by a stable name; the renderer picks one per ring tile by index.
+// Medieval tiles from the Kenney Hexagon Pack (CC0), same source as the buildings.
+export type TownSpriteKey =
+  | "market"
+  | "church"
+  | "house"
+  | "blacksmith"
+  | "windmill"
+  | "tower"
+  | "cabin";
+const TOWN_SPRITE_FILE: Record<TownSpriteKey, string> = {
+  market: "town_market.png",
+  church: "town_church.png",
+  house: "town_house.png",
+  blacksmith: "town_blacksmith.png",
+  windmill: "town_windmill.png",
+  tower: "town_tower.png",
+  cabin: "town_cabin.png",
+};
+
 const cache = new Map<string, HTMLImageElement>();
 
 function load(file: string): HTMLImageElement {
@@ -59,6 +81,9 @@ for (const file of Object.values(BUILDING_SPRITE_FILE)) {
 }
 for (const file of Object.values(UNIT_SPRITE_FILE)) {
   if (file) cache.set(file, load(file));
+}
+for (const file of Object.values(TOWN_SPRITE_FILE)) {
+  cache.set(file, load(file));
 }
 
 function ready(img: HTMLImageElement | undefined): img is HTMLImageElement {
@@ -81,5 +106,10 @@ export function unitSprite(k: UnitKind): HTMLImageElement | null {
   const file = UNIT_SPRITE_FILE[k];
   if (!file) return null;
   const img = cache.get(file);
+  return ready(img) ? img : null;
+}
+
+export function townSprite(k: TownSpriteKey): HTMLImageElement | null {
+  const img = cache.get(TOWN_SPRITE_FILE[k]);
   return ready(img) ? img : null;
 }

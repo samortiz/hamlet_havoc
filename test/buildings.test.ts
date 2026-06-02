@@ -8,7 +8,7 @@ import { describe, expect, it } from "vitest";
 import {
   BUILD_TICKS,
   CRAFT_TICKS,
-  HAY_FIELD_BUILD_TICKS,
+  STABLES_BUILD_TICKS,
   TICKS_PER_SECOND,
   TRAIN_TICKS,
   WORKER_SPAWN_TICKS,
@@ -176,6 +176,31 @@ describe("mine placement + type rolling (req §13)", () => {
     expect(Math.round(s.units[id].x)).toBe(m.x);
     expect(Math.round(s.units[id].y)).toBe(m.y);
   });
+
+  it("snaps the builder to a tile centre when it builds from its own tile (req §7.1)", () => {
+    let s = createInitialState(2024);
+    const id = firstWorkerId(s);
+    const m = findMountain(s);
+    // Stand the worker on a walkable neighbour of the mountain — the tile it
+    // would build the mine from — but at a fractional position (mid-tile, as if
+    // caught mid-march). The build-from tile is the worker's own tile, so the
+    // path is empty and nothing walks it.
+    const adj = hexNeighbors(m.x, m.y).find((n) => isWalkable(s.map, n.x, n.y))!;
+    s = {
+      ...s,
+      resources: { ...s.resources, wood: 10 },
+      units: { ...s.units, [id]: { ...s.units[id], x: adj.x + 0.4, y: adj.y - 0.3 } },
+    };
+
+    s = update(s, [{ type: "build", unitIds: [id], kind: "mine", tx: m.x, ty: m.y }], 1);
+    // One tick is enough to enter the working phase; the builder must already be
+    // centred (not left at adj.x + 0.4) before any progress accrues.
+    expect(s.units[id].order.type).toBe("build");
+    expect(Number.isInteger(s.units[id].x)).toBe(true);
+    expect(Number.isInteger(s.units[id].y)).toBe(true);
+    expect(s.units[id].x).toBe(adj.x);
+    expect(s.units[id].y).toBe(adj.y);
+  });
 });
 
 describe("repair (req §7.1)", () => {
@@ -221,7 +246,7 @@ describe("demolish (req §7.1)", () => {
 });
 
 describe("smithy crafting (req §7.2)", () => {
-  it("a worker stationed in a smithy produces sword + shield items over time", () => {
+  it("a craft order produces exactly one item, then the operator leaves idle (§7.2)", () => {
     let s = createInitialState(2024);
     const id = firstWorkerId(s);
     const sx = HAMLET_CENTER.x + 3;
@@ -236,17 +261,24 @@ describe("smithy crafting (req §7.2)", () => {
     const smithy = Object.values(s.buildings).find((b) => b.x === sx && b.y === sy)!;
     expect(isBuilt(smithy)).toBe(true);
 
-    // Start crafting swords.
+    // Start crafting a sword, then run for far longer than two swords would take.
     s = update(s, [{ type: "craft", unitIds: [id], buildingId: smithy.id, item: "sword" }], 1);
-    // Wait long enough for two swords + walk-to-smithy time.
-    s = update(s, [], CRAFT_TICKS.sword * 2 + TICKS_PER_SECOND * 20);
-    expect(s.equipment.sword).toBeGreaterThanOrEqual(1);
-    expect(s.resources.iron).toBeLessThanOrEqual(20 - 3); // at least one sword paid
+    s = update(s, [], CRAFT_TICKS.sword * 3 + TICKS_PER_SECOND * 20);
+    // Exactly one sword was made — production does not loop (T4).
+    expect(s.equipment.sword).toBe(1);
+    expect(s.resources.iron).toBe(20 - 3); // only one sword's iron was spent
+    // The operator left the smithy and is now idle, not stuck producing.
+    const after = Object.values(s.buildings).find((b) => b.x === sx && b.y === sy)!;
+    expect(after.occupantId).toBe(null);
+    expect(after.craftItem).toBe(null);
+    expect(s.units[id].insideBuildingId).toBe(null);
+    expect(s.units[id].order.type).toBe("idle");
 
-    // Switch the same operator to shields.
+    // Issuing the command again makes one more — this time a shield.
     s = update(s, [{ type: "craft", unitIds: [id], buildingId: smithy.id, item: "shield" }], 1);
-    s = update(s, [], CRAFT_TICKS.shield + TICKS_PER_SECOND * 10);
-    expect(s.equipment.shield).toBeGreaterThanOrEqual(1);
+    s = update(s, [], CRAFT_TICKS.shield + TICKS_PER_SECOND * 20);
+    expect(s.equipment.shield).toBe(1);
+    expect(s.equipment.sword).toBe(1); // unchanged
   });
 });
 
@@ -330,18 +362,18 @@ describe("barracks training (req §7.3, §7.4)", () => {
   });
 });
 
-describe("hay field (req §7)", () => {
-  it("places a hay-field-under-construction and matures it", () => {
+describe("stables (req §7)", () => {
+  it("places a stables-under-construction and matures it", () => {
     let s = createInitialState(2024);
     const id = firstWorkerId(s);
     const tx = HAMLET_CENTER.x;
     const ty = HAMLET_CENTER.y - 3;
     s = { ...s, resources: { ...s.resources, wood: 10 } };
-    s = update(s, [{ type: "build", unitIds: [id], kind: "hayField", tx, ty }], 1);
-    expect(fieldAt(s.fields, tx, ty)?.stage).toBe("hayBuilding");
+    s = update(s, [{ type: "build", unitIds: [id], kind: "stables", tx, ty }], 1);
+    expect(fieldAt(s.fields, tx, ty)?.stage).toBe("stablesBuilding");
 
-    s = update(s, [], HAY_FIELD_BUILD_TICKS + TICKS_PER_SECOND * 20);
-    expect(fieldAt(s.fields, tx, ty)?.stage).toBe("hayMature");
+    s = update(s, [], STABLES_BUILD_TICKS + TICKS_PER_SECOND * 20);
+    expect(fieldAt(s.fields, tx, ty)?.stage).toBe("stablesMature");
   });
 });
 

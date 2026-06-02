@@ -90,6 +90,16 @@ export type Order =
       path: TileCoord[];
       node: number;
     }
+  // Walk to a riderless horse and mount it (req §9). The unit holds the target
+  // horse's id; on arrival (adjacent) it consumes the horse entity and gains its
+  // buffer HP. If the horse moves (still trotting to the stables) the path is
+  // recomputed; the order ends if the horse is taken or becomes unreachable.
+  | {
+      type: "mount";
+      horseId: number;
+      path: TileCoord[];
+      node: number;
+    }
   // Travel to the town tile and trade (req §18). `sell`/`buy` are resource
   // amounts and `buyHorse` requests a mount; the transaction resolves against
   // the unit's carried inventory once it reaches town, then the unit goes idle.
@@ -142,13 +152,22 @@ export function equippedCount(unit: Unit): number {
   return (unit.equipped.sword ? 1 : 0) + (unit.equipped.shield ? 1 : 0);
 }
 
-// Resource carry capacity (req §6.1, §6.4, §9). Captains carry no resources
-// (their 2-slot capacity is equipment-only). Worker/Soldier share WORKER_CARRY_CAP;
+// Resource carry capacity (req §6.1, §6.4, §9). Every kind shares WORKER_CARRY_CAP;
 // each equipped sword/shield occupies one slot, and a live horse adds 5 slots.
+// Captains have the same slot count but may only fill it with gold and diamonds
+// (see canCarryResource) plus their equipment.
 export function carryCap(unit: Unit): number {
-  if (unit.kind === "captain") return 0;
   const horse = hasHorse(unit) ? HORSE_CARRY_BONUS : 0;
   return Math.max(0, WORKER_CARRY_CAP - equippedCount(unit) + horse);
+}
+
+// Resource types a captain is allowed to carry (req §6.1): high-value goods only.
+const CAPTAIN_CARRY_RESOURCES: ReadonlySet<string> = new Set(["gold", "diamond"]);
+
+// Whether `unit` may carry `resource` (req §6.1). Captains are restricted to gold
+// and diamonds; every other kind carries any resource.
+export function canCarryResource(unit: Unit, resource: string): boolean {
+  return unit.kind !== "captain" || CAPTAIN_CARRY_RESOURCES.has(resource);
 }
 
 export function maxHp(kind: UnitKind): number {

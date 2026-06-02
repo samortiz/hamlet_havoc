@@ -10,10 +10,10 @@ import type { Inventory, ResourceType } from "./resources.js";
 import type { FieldAction } from "./units.js";
 
 // What can be placed via a `build` command. Buildings (BuildingKind, minus
-// mainHall which is pre-built) and the hay-field tile feature share the same
+// mainHall which is pre-built) and the Stables tile feature share the same
 // placement flow: validate terrain, deduct cost, spawn an under-construction
 // site, route workers to it.
-export type BuildableKind = Exclude<BuildingKind, "mainHall"> | "hayField";
+export type BuildableKind = Exclude<BuildingKind, "mainHall"> | "stables";
 
 export type Command =
   | { type: "moveUnits"; unitIds: number[]; tx: number; ty: number }
@@ -21,7 +21,7 @@ export type Command =
   | { type: "gather"; unitIds: number[]; tx: number; ty: number }
   // Farm action (plough/plant/harvest) on the target tile.
   | { type: "field"; unitIds: number[]; action: FieldAction; tx: number; ty: number }
-  // Place a building or hay-field. Validates terrain + cost; on success, the
+  // Place a building or Stables. Validates terrain + cost; on success, the
   // selected workers are ordered to build it (req §7, §7.1).
   | { type: "build"; unitIds: number[]; kind: BuildableKind; tx: number; ty: number }
   // Repair a damaged building. Cost scales with HP missing (req §7.1).
@@ -96,6 +96,14 @@ export type Command =
       offerUnit: Inventory;
       offerStorage: Inventory;
     }
+  // Dismount (req §9): the unit gives up its horse, which becomes a riderless
+  // entity that walks to the nearest Stables to wait. The unit keeps its current
+  // order — it just loses the mount's speed/carry/buffer bonuses.
+  | { type: "dismount"; unitIds: number[] }
+  // Mount (req §9): send the unit to the nearest riderless horse and climb on,
+  // reclaiming its buffer HP. No-op if the unit already has a horse or none are
+  // free. Replaces the unit's current order while it walks to the horse.
+  | { type: "mount"; unitIds: number[] }
   // Stop whatever order the unit currently has and return to idle. Used to pull
   // a smithy operator out, cancel a build, etc.
   | { type: "cancel"; unitIds: number[] }

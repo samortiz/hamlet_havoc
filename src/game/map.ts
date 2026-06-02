@@ -205,6 +205,18 @@ export function placeTown(map: GameMap): TileCoord {
   return { x: tx, y: ty }; // fallback (should never hit on a normal map)
 }
 
+// The town occupies a 7-tile hex flower (req §18): the chosen market tile plus
+// its six neighbours. `townTiles` lists all seven (centre first); `isTownTile`
+// tests membership. Used to let a unit trade from any town tile and to keep the
+// town square clear of player buildings/fields.
+export function townTiles(town: TileCoord): TileCoord[] {
+  return [town, ...hexNeighbors(town.x, town.y)];
+}
+
+export function isTownTile(town: TileCoord, x: number, y: number): boolean {
+  return hexDistance(town, { x, y }) <= 1;
+}
+
 export function generateMap(rngState: number): {
   map: GameMap;
   rngState: number;

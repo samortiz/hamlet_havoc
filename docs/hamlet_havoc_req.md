@@ -177,8 +177,8 @@ Enemies
 ### 6.4 Equipment
 - Captains, Soldiers and Workers can equip: sword and shield. 
   A unit may equip at most **one sword and one shield**.
-- Equipping is handled via UI. **Each equipped sword or shield occupies one carry slot** (counts as one carried item): for a Worker or Soldier (carry cap 5), equipping both leaves 3 slots for resources.
-- **†** Captains carry no resources, but have a dedicated 2-slot capacity used only for equipment (one sword + one shield). 
+- Equipping is handled via UI. **Each equipped sword or shield occupies one carry slot** (counts as one carried item): for any unit (carry cap 5), equipping both leaves 3 slots.
+- **†** Captains share the cap-5 carry capacity but may only fill it with **gold and diamonds** (plus their equipped sword/shield); they cannot carry any other resource. Loot or purchases of other resources are left behind / refused.
 
 ### 6.5 Selection, Movement & Orders
 - Player selects unit(s) by clicking (single) or drag-box (multiple).
@@ -201,14 +201,14 @@ Enemies
 | Barracks       | 3 Stone + 4 Wood + 2 Iron  | 80  | 30 sec     | —       | Trains & houses soldiers/captains   |
 | Mine           | 4 Wood                     | 50  | 30 sec     | —       | Required to mine a mountain tile    |
 | Ploughed Field | — (1 Wheat to plant)       | 5   | 10 sec     | —       | Tile feature; can be planted        |
-| Hay Field      | 3 Wood (fencing)           | 5   | 10 sec     | —       | Tile feature; stables horses (§9)   |
+| Stables        | 3 Wood (fencing)           | 5   | 10 sec     | —       | Tile feature; stables horses (§9)   |
 
 
 ### 7.1 Building Rules
 - All buildings except the Mine and Farm must be placed on grass.
 - Mines must be placed on mountain tiles.
 - Farms (which are a tile-based feature rather than a structure) require ploughed grass.
-- Hay fields are placed on grass and require only a wood fencing cost (no ploughing).
+- Stables are placed on grass and require only a wood fencing cost (no ploughing).
 - Storage values represent how much that building adds to the total storage limit. The storage limit is the sum of all buildings + Main Hall, and storage is a **single pooled total** shown in the HUD.
 - A building under construction is displayed as a partially built sprite until completed.
 - Buildings have HP and can be destroyed in attacks.
@@ -224,7 +224,7 @@ Enemies
 | Sword   | 3 Iron          | +1D6 to Attack  |  20 sec      |
 | Shield  | 2 Iron + 2 Wood | +1D4 to Defense |  30 sec      |
 
-- Any worker stationed inside the smithy produces items
+- A worker stationed inside the smithy produces **one** item per craft order: when the player issues a Craft Sword / Craft Shield command the worker makes a single item, then leaves the smithy and stands idle. To make more, the player issues the command again.
 
 ### 7.3 Barracks Training
 - Worker → Soldier: 1 season
@@ -265,11 +265,13 @@ Enemies
 
 ## 9. Horses
 
-- Purchased in town for resources with a value of 20.  So 4 meat, or 10 wheat could buy a horse.
+- Purchased in town for resources with a value of 20.  So 5 meat, or 10 wheat could buy a horse.
 - Effect: +10 HP to the unit.  When the first 10 HP are lost on the unit the horse dies.
 - Horses double travel speed and allow carrying an extra 5 resources.
-- horses require that there be a hay field available.  Each hay field can support 2 horses (tunable constant).  A horse cannot be purchased if there is not enough available hay field to support it. 
+- horses require that there be a Stables available.  Each Stables can support 2 horses (tunable constant).  A horse cannot be purchased if there is not enough available Stables capacity to support it. 
 - Any unit type can use a horse.
+- **Dismount / mount.** A mounted unit can **dismount** (action-panel button or the `H` key). The horse becomes a riderless entity at the unit's tile and walks to the **nearest Stables** to wait there; the unit keeps doing whatever it was doing, just at foot stats. A unit without a horse can **mount** (button / `H`): it walks to the nearest riderless horse and climbs on, reclaiming the horse's remaining buffer HP. A horse's buffer HP does not regenerate, so dismounting and re-mounting preserves (but never restores) it.
+- **Stable capacity counts every horse the hamlet owns** — both the ones being ridden and the riderless ones waiting at a Stables. Dismounting and mounting only move a horse between those two pools, so neither frees a slot; only losing a horse (its buffer HP reaching 0 in combat) does.
 
 ---
 
@@ -303,7 +305,7 @@ Enemies
 6. Ploughed but unplanted tiles persist into the next season.
 7. A worker left **idle standing on a ploughed field** tends it hands-free: it plants a ploughed field in spring (when seed wheat is on hand) and harvests a ripe one in fall, without an explicit order.
 
-> **Hay fields** are separate from the wheat lifecycle: they are designated on grass for a wood fencing cost and do not need ploughing or annual replanting. They produce no resource — each mature hay field simply provides stabling capacity for 2 horses (§9). Hay is not a stored or tradeable resource.
+> **Stables** are separate from the wheat lifecycle: they are designated on grass for a wood fencing cost and do not need ploughing or annual replanting. They produce no resource — each mature Stables simply provides stabling capacity for 2 horses (§9). Hay is not a stored or tradeable resource.
 
 ---
 
@@ -368,6 +370,11 @@ Spring → Summer → Fall → Winter → (Year++; end-of-year event) → Spring
 - **Summer**: Fishing bonus - faster fishing 
 - **Fall**: Harvesting allowed. Wheat must be harvested before winter or it is lost.
 - **Winter**: Reduced fishing Crops cannot be planted or harvested. Water predators persist one year from their spawn date and despawn on schedule (see §17.3), not at the fall→winter boundary.
+
+### 15.4 Game Speed
+- The player can adjust how fast time passes. Five speeds are offered: **¼×, ½×, 1× (regular), 2×, 4×**, selectable from a HUD button row and with the `[` / `]` keys (slower / faster).
+- Speed is a loop concern, like pause: it scales how fast sim time accumulates and so changes how many fixed-timestep ticks run per real second, but each tick is still a normal deterministic `update()`. It is **not** simulation state — it is never saved and never fed to `update()`.
+- Pause (Space) is independent of speed; resuming continues at the selected speed.
 
 ---
 
@@ -476,7 +483,8 @@ A library of misc events provides variety. The event is chosen by seeded RNG; ma
 ## 18. Town (External Marketplace)
 
 - A fixed **location on the map** far from the Main Hall. There is no town menu/screen — units must physically travel there carrying goods.
-- Units can buy or sell **all basic resources** at their listed values, and purchase **horses** (cost = 20 in resource value, e.g., 4 meat or 10 wheat).
+- The town occupies a **7-tile hex flower**: a central **market** tile plus its six neighbours, each shown with its own medieval building sprite (church, house, blacksmith, windmill, tower, cabin) so the marketplace reads as a small town. A unit standing on **any** of the seven town tiles can trade — it need not reach the exact centre. All seven tiles are **reserved**: the player cannot build on them or plough them into fields.
+- Units can buy or sell **all basic resources** at their listed values, and purchase **horses** (cost = 20 in resource value, e.g., 5 meat or 10 wheat).
 - A trade requires a unit to carry goods to town and carry purchases back.
 - Town Interface. When a worker gets to town, show a dialog / window to facilitate trading. 
 - It will need three areas, one with items for purchase in town, one with items currently stored in town and one with items carried by the unit that went to town. 
@@ -497,7 +505,7 @@ requested then the trade can proceed, otherwise the town shopkeeper will reject 
 - **Resource bar**: current quantity of each resource with icons.
 - **Population display**: current workers / soldiers / captains, and housing capacity.
 - **Season and date**: current season, year, and time remaining in current season.
-- **Upcoming event**: icon and label for the end-of-year event.
+- **Upcoming event**: icon and label for the end-of-year event. Only the *type* is shown in advance (§16.0) — a Misc event is labelled simply "Misc" with a neutral icon; its specific name (and whether it is good or bad) is revealed only when the event fires and its dialog opens at year's end.
 - **Selected unit panel**: details (type, HP, current action, equipment) for the selected unit(s).
 - **Build menu**: list of buildings/actions available given current selection and resources.
 - **Notifications**: a rolling toast stack surfaces player-facing upkeep events — a worker starving, a soldier/captain demoted, a horse lost — so the player isn't silently penalised. Each notification is toasted once (deduped by id); a loaded save does not replay old ones.
@@ -518,14 +526,16 @@ requested then the trade can proceed, otherwise the town shopkeeper will reject 
   - Right click (or context): move or action target. In placement mode, right-click cancels placement.
 - **Keyboard**:
   - Arrow keys / WASD: camera pan.
-  - Number keys 1–6: enter placement mode for House (1), Barn (2), Smithy (3), Barracks (4), Mine (5), Hay Field (6). Left-click then places.
+  - Number keys 1–6: enter placement mode for House (1), Barn (2), Smithy (3), Barracks (4), Mine (5), Stables (6). Left-click then places.
   - P: plough the hovered grass tile with the selected workers.
   - X: demolish the selected building (Main Hall excluded).
   - R: repair the selected building with the selected workers.
   - K / L: craft Sword / Shield at the selected smithy.
   - T: train selected unit at the selected barracks (worker → soldier or soldier → captain, by source kind).
+  - H: mount / dismount the selected units (dismount if the lead unit has a horse, otherwise mount the nearest riderless horse — §9).
   - C: cancel the current order on selected units.
   - Space: pause.
+  - `[` / `]`: slow down / speed up game time (§15.4).
   - Escape: cancel placement mode / clear selection / close menu.
   - Number keys 7–9 (control groups): deferred — not in v1.
 

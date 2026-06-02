@@ -1,6 +1,6 @@
 // Town & Horses (req §9, §18). Headless sim tests for the marketplace
 // (placement, value-based trade with change, horse purchase) and mounts (carry
-// bonus, double speed, buffer HP, hay-field stable capacity).
+// bonus, double speed, buffer HP, Stables capacity).
 
 import { describe, expect, it } from "vitest";
 import {
@@ -27,14 +27,14 @@ function firstUnitId(s: GameState): number {
 function setUnit(s: GameState, id: number, patch: Partial<Unit>): GameState {
   return { ...s, units: { ...s.units, [id]: { ...s.units[id], ...patch } } };
 }
-// A mature hay field stables 2 horses (req §9). Horse purchases are blocked
-// without free stable capacity, so seed `n` fields' worth of slots.
-function withHayFields(s: GameState, n = 1): GameState {
+// A mature Stables houses 2 horses (req §9). Horse purchases are blocked
+// without free stable capacity, so seed `n` stables' worth of slots.
+function withStables(s: GameState, n = 1): GameState {
   const fields = { ...s.fields };
   let nextEntityId = s.nextEntityId;
   for (let i = 0; i < n; i++) {
     const id = nextEntityId++;
-    fields[id] = { ...makeField(id, HAMLET_CENTER.x + i, HAMLET_CENTER.y, "hay"), stage: "hayMature" };
+    fields[id] = { ...makeField(id, HAMLET_CENTER.x + i, HAMLET_CENTER.y, "stables"), stage: "stablesMature" };
   }
   return { ...s, nextEntityId, fields };
 }
@@ -104,7 +104,7 @@ describe("trading (req §18, §8)", () => {
 
   it("refuses a trade the unit cannot pay for", () => {
     let s = createInitialState(2024);
-    s = withHayFields(s); // stable capacity available, so affordability is what bites
+    s = withStables(s); // stable capacity available, so affordability is what bites
     const id = firstUnitId(s);
     const spot = tileByTown(s);
     s = setUnit(s, id, { x: spot.x, y: spot.y, carrying: { wheat: 1 } }); // value 2
@@ -213,7 +213,7 @@ describe("town interface — value-checked trades (req §18)", () => {
 
   it("can buy a horse paying entirely from town storage", () => {
     let s = createInitialState(2024);
-    s = withHayFields(s);
+    s = withStables(s);
     const id = firstUnitId(s);
     s = setUnit(s, id, { x: s.town.x, y: s.town.y, carrying: {} });
     s = { ...s, townStorage: { ...s.townStorage, gold: 2 } }; // 2 gold = 20 value
@@ -254,7 +254,7 @@ describe("town interface — value-checked trades (req §18)", () => {
 describe("horses (req §9)", () => {
   it("a unit can buy a horse at town by selling carried goods", () => {
     let s = createInitialState(2024);
-    s = withHayFields(s);
+    s = withStables(s);
     const id = firstUnitId(s);
     const spot = tileByTown(s);
     s = setUnit(s, id, { x: spot.x, y: spot.y, carrying: { meat: 5 } }); // 20 value
@@ -271,8 +271,8 @@ describe("horses (req §9)", () => {
     expect(HORSE_BONUS_HP).toBe(10);
   });
 
-  it("cannot buy a horse with no free hay-field stable capacity (req §9)", () => {
-    // No hay fields → no stable → purchase is blocked even when affordable.
+  it("cannot buy a horse with no free Stables capacity (req §9)", () => {
+    // No stables → no stable slot → purchase is blocked even when affordable.
     let s = createInitialState(2024);
     const id = firstUnitId(s);
     const spot = tileByTown(s);
@@ -284,10 +284,10 @@ describe("horses (req §9)", () => {
   });
 
   it("blocks the horse once every stable slot is taken (req §9)", () => {
-    // One mature hay field stables 2 horses. With two mounted units already, a
+    // One mature Stables houses 2 horses. With two mounted units already, a
     // third unit cannot buy a horse.
     let s = createInitialState(2024);
-    s = withHayFields(s, 1); // capacity 2
+    s = withStables(s, 1); // capacity 2
     const ids = Object.keys(s.units).map(Number);
     s = setUnit(s, ids[0], { horseHp: HORSE_BONUS_HP });
     s = setUnit(s, ids[1], { horseHp: HORSE_BONUS_HP });

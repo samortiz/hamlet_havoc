@@ -24,5 +24,6 @@ export function deserialize(json: string): GameState {
   state.damageEvents = []; // transient, never persisted
   state.healEvents = []; // transient, never persisted (req §6.2)
   state.groundItems ??= {}; // tolerate a save written before any loot dropped
+  state.horses ??= {}; // tolerate a save written before any horse was dismounted
   return state;
 }

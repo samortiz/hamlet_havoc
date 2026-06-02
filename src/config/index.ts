@@ -5,6 +5,13 @@ import type { ResourceType } from "../game/resources.js";
 
 export const TICKS_PER_SECOND = 30;
 
+// Game-speed multipliers the player can cycle through (req §15.4). The loop
+// scales how fast sim time accumulates by the selected factor; 1 is real time.
+// This is a loop/view concern (like pause), not simulation state — it is never
+// saved or fed to update().
+export const GAME_SPEEDS = [0.25, 0.5, 1, 2, 4] as const;
+export const DEFAULT_SPEED_INDEX = 2; // 1× (regular)
+
 export const ticks = (seconds: number): number =>
   Math.round(seconds * TICKS_PER_SECOND);
 
@@ -152,14 +159,14 @@ export const KRAKEN_SPAWN_CHANCE = 0.07;
 // Bought in town for resources worth HORSE_COST_VALUE (e.g. 4 meat or 10 wheat).
 // A horse adds 10 buffer HP that take damage first (the horse dies once those 10
 // HP are gone), doubles travel speed, and adds 5 carry slots. Horses have no
-// per-season upkeep (§9); hay-field capacity gates ownership instead.
+// per-season upkeep (§9); Stables capacity gates ownership instead.
 export const HORSE_COST_VALUE = 20;
 export const HORSE_BONUS_HP = 10;
 export const HORSE_CARRY_BONUS = 5;
 export const HORSE_SPEED_MULT = 2;
-// Each mature hay field stables this many horses (req §9); a horse can't be
+// Each mature Stables houses this many horses (req §9); a horse can't be
 // bought when every stable slot is taken.
-export const HAY_FIELD_HORSE_CAPACITY = 2;
+export const STABLES_HORSE_CAPACITY = 2;
 
 // --- Town marketplace (req §18) ---
 // A fixed map location far from the Main Hall where units physically trade
@@ -249,7 +256,7 @@ export const BUILDING_HP = {
   barracks: 80,
   mine: 50,
 } as const;
-export const FIELD_HP = 5; // ploughed/hay fields are flimsy tile features (§7)
+export const FIELD_HP = 5; // ploughed fields/stables are flimsy tile features (§7)
 
 // Construction times in ticks (§7 table). Starting buildings are spawned
 // already complete (progress = BUILD_TICKS[kind]) in createInitialState.
@@ -262,9 +269,9 @@ export const BUILD_TICKS = {
   mine: ticks(30),
 } as const;
 
-// Hay-field is a tile feature (like a ploughed field), not a building (§7).
+// Stables is a tile feature (like a ploughed field), not a building (§7).
 // Construction time + cost shipped here so the build flow stays data-driven.
-export const HAY_FIELD_BUILD_TICKS = ticks(10);
+export const STABLES_BUILD_TICKS = ticks(10);
 
 // Construction cost per kind (§7 table). A blank record means "no cost"
 // (e.g., mainHall is pre-built and never placed by the player).
@@ -280,7 +287,7 @@ export const BUILDING_COST: Record<keyof typeof BUILD_TICKS, BuildCost> = {
   barracks: { stone: 3, wood: 4, iron: 2 },
   mine: { wood: 4 },
 };
-export const HAY_FIELD_COST: BuildCost = { wood: 3 };
+export const STABLES_COST: BuildCost = { wood: 3 };
 
 // --- Smithy crafting (§7.2) ---
 // Per-item craft times: Sword 20s, Shield 30s.
@@ -452,8 +459,8 @@ export const COLORS = {
   fieldPloughed: "#6b5436",
   fieldPlanted: "#9ccc65",
   fieldGrown: "#2e7d32",
-  hayBuilding: "#7a6a52",
-  hayMature: "#c4b070",
+  stablesBuilding: "#7a6a52",
+  stablesMature: "#c4b070",
   // buildings (placeholder fills, req §3.2)
   buildingMainHall: "#8b7355",
   buildingHouse: "#a98c63",

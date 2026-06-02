@@ -193,9 +193,10 @@ describe("combat resolution through update() (req §17)", () => {
   it("loot the killer can't hold drops to the ground for a passer-by (req §6.2)", () => {
     let s = createInitialState(2024);
     const id = firstUnitId(s);
-    // A captain carries no resources (cap 0), so its kill loot all hits the ground.
-    s = setKind(s, id, "captain");
-    s = setUnit(s, id, { x: HAMLET_CENTER.x, y: HAMLET_CENTER.y, hp: 99 });
+    // A soldier whose cart is already full has no room for loot — it all hits
+    // the ground (carry cap 5, filled with wood here).
+    s = setKind(s, id, "soldier");
+    s = setUnit(s, id, { x: HAMLET_CENTER.x, y: HAMLET_CENTER.y, hp: 99, carrying: { wood: 5 } });
     const n = hexNeighbors(HAMLET_CENTER.x, HAMLET_CENTER.y)[0];
     const added = addEnemy(s, "goblin", n.x, n.y);
     s = added.s;
@@ -215,6 +216,33 @@ describe("combat resolution through update() (req §17)", () => {
     expect(Object.keys(s.groundItems)).toHaveLength(0);
     const collected = (s.units[wid].carrying.iron ?? 0) + (s.units[wid].carrying.gold ?? 0);
     expect(collected).toBeGreaterThan(0);
+  });
+
+  it("a captain pockets gold/diamond loot but leaves other resources behind (req §6.1)", () => {
+    let s = createInitialState(2024);
+    const id = firstUnitId(s);
+    s = setKind(s, id, "captain");
+    s = setUnit(s, id, { x: HAMLET_CENTER.x, y: HAMLET_CENTER.y, hp: 99, carrying: {} });
+    // Drop one gold and one iron stack on the captain's tile.
+    const gx = HAMLET_CENTER.x;
+    const gy = HAMLET_CENTER.y;
+    const g1 = s.nextEntityId;
+    const g2 = g1 + 1;
+    s = {
+      ...s,
+      nextEntityId: g2 + 1,
+      groundItems: {
+        [g1]: { id: g1, x: gx, y: gy, resource: "gold", qty: 2 },
+        [g2]: { id: g2, x: gx, y: gy, resource: "iron", qty: 2 },
+      },
+    };
+    s = advance(s, 1);
+    // Captain keeps the gold, ignores the iron — which stays on the ground.
+    expect(s.units[id].carrying.gold).toBe(2);
+    expect(s.units[id].carrying.iron ?? 0).toBe(0);
+    const left = Object.values(s.groundItems);
+    expect(left).toHaveLength(1);
+    expect(left[0].resource).toBe("iron");
   });
 
   it("a unit closing on an attack order stops on a tile centre", () => {

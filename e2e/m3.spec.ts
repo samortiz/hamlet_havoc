@@ -42,7 +42,7 @@ test("a worker places + builds a House, raising storage capacity", async ({ page
       page.evaluate(() => {
         const s = window.__game!.getState();
         const built = Object.values(s.buildings).find(
-          (b) => b.kind === "house" && b.progress >= 600 /* BUILD_TICKS.house */,
+          (b) => b.kind === "house" && b.progress >= 450 /* BUILD_TICKS.house */,
         );
         return !!built;
       }),
@@ -56,7 +56,7 @@ test("a worker places + builds a House, raising storage capacity", async ({ page
     const STORAGE = { mainHall: 20, house: 10, barn: 50 };
     for (const b of Object.values(s.buildings)) {
       const v = STORAGE[b.kind as keyof typeof STORAGE];
-      if (v && b.progress >= 600) cap += v;
+      if (v && b.progress >= 450) cap += v;
     }
     return cap;
   });

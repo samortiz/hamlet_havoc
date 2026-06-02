@@ -11,6 +11,7 @@ import {
   CAMERA_PAN_PX_PER_SEC,
   DRAG_SELECT_THRESHOLD_PX,
   HEX_SIZE,
+  MAP_WIDTH,
   type BuildCost,
 } from "../config/index.js";
 import {
@@ -27,9 +28,9 @@ import { fieldAt } from "../game/fields.js";
 import { fieldActionInSeason, seasonAt } from "../game/season.js";
 import type { ResourcePool, ResourceType } from "../game/resources.js";
 import { hexToPixel } from "../game/hex.js";
-import { HAMLET_CENTER, inBounds, tileAt, type TileCoord } from "../game/map.js";
+import { forestRemaining, HAMLET_CENTER, inBounds, isTownTile, tileAt, type TileCoord } from "../game/map.js";
 import type { GameState } from "../game/state.js";
-import type { FieldAction, UnitKind } from "../game/units.js";
+import { hasHorse, type FieldAction, type UnitKind } from "../game/units.js";
 import {
   centerOnTile,
   clampCamera,
@@ -61,14 +62,14 @@ const PAN_KEYS: Record<string, readonly [number, number]> = {
   KeyS: [0, 1],
 };
 
-// Digit → buildable kind (req §7.1). Digit 1 = House, ... 6 = Hay.
+// Digit → buildable kind (req §7.1). Digit 1 = House, ... 6 = Stables.
 const PLACEMENT_KEYS: Record<string, BuildableKind> = {
   Digit1: "house",
   Digit2: "barn",
   Digit3: "smithy",
   Digit4: "barracks",
   Digit5: "mine",
-  Digit6: "hayField",
+  Digit6: "stables",
 };
 
 export interface Controls {
@@ -83,9 +84,11 @@ export function createControls(opts: {
   getState: () => GameState;
   enqueue: (cmd: Command) => void;
   onTogglePause: () => void;
+  // Step the game speed down (−1) or up (+1) — the [ and ] keys (req §15.4).
+  onCycleSpeed: (dir: -1 | 1) => void;
   actionPanel: HTMLElement;
 }): Controls {
-  const { canvas, getState, enqueue, onTogglePause, actionPanel } = opts;
+  const { canvas, getState, enqueue, onTogglePause, onCycleSpeed, actionPanel } = opts;
 
   let viewW = canvas.clientWidth || 1;
   let viewH = canvas.clientHeight || 1;
@@ -101,6 +104,7 @@ export function createControls(opts: {
   let pendingField: FieldAction | null = null;
   let hoveredUnitId: number | null = null;
   let hoveredBuildingId: number | null = null;
+  let hoveredForestWood: number | null = null;
   // Build buttons, kept so their affordability (disabled state + cost tooltip)
   // can be refreshed every frame as resources change — not just on rebuild.
   let buildButtons: Array<[BuildableKind, HTMLButtonElement]> = [];
@@ -146,6 +150,7 @@ export function createControls(opts: {
     const f = fieldAt(s.fields, tx, ty);
     if (action === "plough") {
       const t = tileAt(s.map, tx, ty);
+      if (isTownTile(s.town, tx, ty)) return false; // town flower is reserved (req §18)
       return (t === "grass" || t === "stump") && !f && !buildingAt(s.buildings, tx, ty);
     }
     if (action === "plant") return !!f && f.stage === "ploughed";
@@ -194,7 +199,7 @@ export function createControls(opts: {
       ["smithy", "3 Smithy"],
       ["barracks", "4 Barracks"],
       ["mine", "5 Mine"],
-      ["hayField", "6 Hay"],
+      ["stables", "6 Stables"],
     ];
     buildButtons = [];
     for (const [kind, label] of buildKinds) {
@@ -245,6 +250,18 @@ export function createControls(opts: {
           return btn;
         };
         unitSection.append(equipButton("sword"), equipButton("shield"));
+
+        // Mount / Dismount (req §9). Dismount when the lead unit has a horse;
+        // otherwise offer Mount when a riderless horse exists to claim.
+        if (hasHorse(lead)) {
+          unitSection.append(
+            apButton("Dismount", () => { enqueue({ type: "dismount", unitIds: [...selection] }); }),
+          );
+        } else if (Object.keys(getState().horses).length > 0) {
+          unitSection.append(
+            apButton("Mount", () => { enqueue({ type: "mount", unitIds: [...selection] }); }),
+          );
+        }
       }
 
       actionPanel.append(unitSection);
@@ -443,7 +460,7 @@ export function createControls(opts: {
     // Placement mode wins: a left-click in placement mode places the building.
     if (placementKind) {
       const s = getState();
-      if (placementValid(s.map, s.buildings, s.fields, placementKind, tx, ty)) {
+      if (placementValid(s.map, s.buildings, s.fields, placementKind, tx, ty, s.town)) {
         enqueue({ type: "build", unitIds: [...selection], kind: placementKind, tx, ty });
       }
       placementKind = null; // one-shot; press the key again to place more
@@ -479,6 +496,7 @@ export function createControls(opts: {
     mouse.inside = false;
     hoveredUnitId = null;
     hoveredBuildingId = null;
+    hoveredForestWood = null;
   });
 
   canvas.addEventListener("mousemove", (e) => {
@@ -487,14 +505,19 @@ export function createControls(opts: {
     mouse.y = p.y;
     mouse.inside = true;
     hoveredUnitId = unitAtScreen(p.x, p.y);
-    // A hovered unit takes precedence; otherwise surface the building under the
-    // cursor for its tooltip.
+    // A hovered unit takes precedence; otherwise surface the building — or, on a
+    // bare forest tile, its remaining wood (req §12) — under the cursor.
+    hoveredBuildingId = null;
+    hoveredForestWood = null;
     if (hoveredUnitId === null) {
       const tile = screenToHex(camera, p.x, p.y);
-      const b = buildingAt(getState().buildings, tile.x, tile.y);
-      hoveredBuildingId = b ? b.id : null;
-    } else {
-      hoveredBuildingId = null;
+      const s = getState();
+      const b = buildingAt(s.buildings, tile.x, tile.y);
+      if (b) {
+        hoveredBuildingId = b.id;
+      } else if (inBounds(s.map, tile.x, tile.y) && tileAt(s.map, tile.x, tile.y) === "forest") {
+        hoveredForestWood = forestRemaining(s.map, tile.y * MAP_WIDTH + tile.x);
+      }
     }
     if (drag.active) {
       drag.curX = p.x;
@@ -558,6 +581,15 @@ export function createControls(opts: {
     if (e.code === "Space") {
       e.preventDefault();
       onTogglePause();
+      return;
+    }
+    // [ / ] : slow down / speed up game time (req §15.4, §20).
+    if (e.code === "BracketLeft") {
+      onCycleSpeed(-1);
+      return;
+    }
+    if (e.code === "BracketRight") {
+      onCycleSpeed(1);
       return;
     }
     if (e.code === "Escape") {
@@ -633,6 +665,16 @@ export function createControls(opts: {
       }
       return;
     }
+    // H: mount / dismount the selected units (req §9). Dismount if the lead unit
+    // has a horse, otherwise send the selection to the nearest riderless horse.
+    if (e.code === "KeyH") {
+      if (selection.length > 0) {
+        const u = getState().units[selection[0]];
+        if (u && hasHorse(u)) enqueue({ type: "dismount", unitIds: [...selection] });
+        else enqueue({ type: "mount", unitIds: [...selection] });
+      }
+      return;
+    }
     // C: cancel current order on selected units (used to pull operators out).
     if (e.code === "KeyC") {
       if (selection.length > 0) {
@@ -690,7 +732,7 @@ export function createControls(opts: {
     const tile = hoveredTile();
     const s = getState();
     if (placementKind) {
-      const valid = placementValid(s.map, s.buildings, s.fields, placementKind, tile.x, tile.y);
+      const valid = placementValid(s.map, s.buildings, s.fields, placementKind, tile.x, tile.y, s.town);
       return { tx: tile.x, ty: tile.y, valid };
     }
     if (pendingField && selection.length > 0) {
@@ -718,6 +760,7 @@ export function createControls(opts: {
       placement: placementGhost(),
       hoveredUnitId,
       hoveredBuildingId,
+      hoveredForestWood,
       mouseScreenX: mouse.x,
       mouseScreenY: mouse.y,
     };

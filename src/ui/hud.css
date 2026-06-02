@@ -111,7 +111,8 @@ body {
 
 /* Unit tooltip */
 #unit-tooltip,
-#building-tooltip {
+#building-tooltip,
+#forest-tooltip {
   position: absolute;
   pointer-events: none;
   padding: 8px 12px;
@@ -126,7 +127,8 @@ body {
 }
 
 #tt-title,
-#bt-title {
+#bt-title,
+#ft-title {
   font-weight: 700;
   color: var(--gold);
   font-size: 13px;
@@ -226,6 +228,39 @@ body {
 
 #hud-controls button:hover {
   background: var(--brown-dark);
+}
+
+/* Game-speed buttons (req §15.4): a small row above the New/Save/Load row. */
+#hud-speed {
+  position: absolute;
+  bottom: 44px;
+  right: 12px;
+  display: flex;
+  gap: 4px;
+  pointer-events: auto;
+}
+
+#hud-speed button {
+  font: inherit;
+  font-size: 13px;
+  min-width: 34px;
+  color: var(--parchment);
+  background: rgba(28, 35, 22, 0.9);
+  border: 1px solid var(--gold);
+  border-radius: 3px;
+  padding: 3px 6px;
+  cursor: pointer;
+}
+
+#hud-speed button:hover {
+  background: var(--brown-dark);
+}
+
+/* The currently-selected speed: filled gold so it reads as "on". */
+#hud-speed button.active {
+  background: var(--gold);
+  color: #1c2316;
+  font-weight: 700;
 }
 
 #hud-toast {

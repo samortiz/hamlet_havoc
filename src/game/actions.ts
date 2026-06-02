@@ -17,9 +17,6 @@ import {
   FISH_TICKS_BY_SEASON,
   FISH_TICKS_PER_UNIT,
   HARVEST_TICKS,
-  HAY_FIELD_BUILD_TICKS,
-  HAY_FIELD_COST,
-  HAY_FIELD_HORSE_CAPACITY,
   HORSE_BONUS_HP,
   HORSE_COST_VALUE,
   HORSE_SPEED_MULT,
@@ -30,6 +27,9 @@ import {
   PLANT_WHEAT_COST,
   PLOUGH_TICKS,
   SEASONS,
+  STABLES_BUILD_TICKS,
+  STABLES_COST,
+  STABLES_HORSE_CAPACITY,
   TICKS_PER_SECOND,
   TRAIN_TICKS,
   HEAL_PERCENT_PER_INTERVAL,
@@ -112,10 +112,12 @@ import {
 } from "./events.js";
 import type { BuildableKind } from "./commands.js";
 import { fieldAt, makeField, type Field } from "./fields.js";
+import { makeHorse, type Horse } from "./horses.js";
 import { hexDistance, hexNeighbors } from "./hex.js";
 import {
   forestRemaining,
   inBounds,
+  isTownTile,
   isWalkable,
   isWaterAdjacent,
   mountainTypeAt,
@@ -147,6 +149,7 @@ import type {
   RunStats,
 } from "./state.js";
 import {
+  canCarryResource,
   carryCap,
   hasHorse,
   makeUnit,
@@ -180,6 +183,7 @@ export interface SimCtx {
   fields: Record<number, Field>;
   enemies: Record<number, Enemy>; // copied each step (req §2.6)
   groundItems: Record<number, GroundItem>; // loose loot on the ground (req §6.2)
+  horses: Record<number, Horse>; // riderless horses (req §9); copied each step
   equipment: EquipmentPool;
   town: TileCoord;
   townStorage: ResourcePool; // goods stored at town (req §18); outside the cap
@@ -313,7 +317,8 @@ export function startGather(ctx: SimCtx, unit: Unit, tx: number, ty: number): Or
   if (!c) return { type: "idle" };
   // Only workers can chop wood (req §6.1: soldiers can't plant or chop wood).
   if (c.resource === "wood" && unit.kind !== "worker") return { type: "idle" };
-  // Mining + fishing are open to workers and soldiers; captains carry nothing.
+  // Mining + fishing are open to workers and soldiers; captains don't gather
+  // (they carry only gold/diamonds, §6.1).
   if (unit.kind === "captain") return { type: "idle" };
   const path = pathFromUnit(ctx.map, unit, c.work, ctx.buildings);
   if (!path) return { type: "idle" };
@@ -432,7 +437,7 @@ export function startTrade(
   buyHorse: boolean,
   buildings: Record<number, Building>,
 ): Order {
-  // Captains carry no resources (§6.1) but may still ride to town for a horse.
+  // Captains carry only gold/diamonds (§6.1) but may still ride to town for a horse.
   const path = pathFromUnit(map, unit, town, buildings);
   if (!path) return { type: "idle" };
   return { type: "trade", tx: town.x, ty: town.y, sell, buy, buyHorse, phase: "toTown", path, node: 0 };
@@ -441,7 +446,7 @@ export function startTrade(
 // --- Placement & costing (req §7.1, §7) ---
 
 export function buildableCost(kind: BuildableKind): BuildCost {
-  return kind === "hayField" ? HAY_FIELD_COST : BUILDING_COST[kind as BuildingKind];
+  return kind === "stables" ? STABLES_COST : BUILDING_COST[kind as BuildingKind];
 }
 
 export function placementValid(
@@ -451,10 +456,13 @@ export function placementValid(
   kind: BuildableKind,
   x: number,
   y: number,
+  town: TileCoord,
 ): boolean {
   if (!inBounds(map, x, y)) return false;
   if (buildingAt(buildings, x, y)) return false;
   if (fieldAt(fields, x, y)) return false;
+  // The town flower (market + its six tiles) is reserved (req §18).
+  if (isTownTile(town, x, y)) return false;
   const t = tileAt(map, x, y);
   // Mines must sit on mountain; everything else needs grass/stump (§7.1).
   if (kind === "mine") return t === "mountain";
@@ -760,6 +768,8 @@ function advanceUnitOrder(
       return advanceOperate(unit, dtTicks, ctx);
     case "attack":
       return advanceAttack(unit, dtTicks, ctx);
+    case "mount":
+      return advanceMount(unit, dtTicks, ctx);
     case "trade":
       return advanceTrade(unit, dtTicks, ctx, units);
   }
@@ -778,6 +788,7 @@ function collectGroundItems(ctx: SimCtx, unit: Unit): Unit {
   for (const key of Object.keys(ctx.groundItems)) {
     const g = ctx.groundItems[Number(key)];
     if (g.x !== tx || g.y !== ty) continue;
+    if (!canCarryResource(unit, g.resource)) continue; // captains take only gold/diamond (§6.1)
     const room = carryCap(unit) - carriedTotal(carrying);
     if (room <= 0) break;
     const taken = Math.min(room, g.qty);
@@ -804,9 +815,10 @@ function advanceMove(unit: Unit, dtTicks: number, ctx: SimCtx): Unit {
   if (o.type !== "move") return unit;
   const r = stepPath(unit.x, unit.y, o.path, o.node, moveSpeed(unit).tilesPerTick * dtTicks);
   // A unit never steps onto a tile an enemy occupies: if this step
-  // would land on one, hold at the current tile and drop the move order.
+  // would land on one, hold at the current tile (snapped to its centre, since
+  // the unit may be mid-march) and drop the move order.
   if (enemyOnTile(ctx.enemies, Math.round(r.x), Math.round(r.y))) {
-    return { ...unit, order: { type: "idle" } };
+    return { ...unit, x: Math.round(unit.x), y: Math.round(unit.y), order: { type: "idle" } };
   }
   if (r.node >= o.path.length) return { ...unit, x: r.x, y: r.y, order: { type: "idle" } };
   return { ...unit, x: r.x, y: r.y, order: { type: "move", path: o.path, node: r.node } };
@@ -833,6 +845,11 @@ function advanceGather(unit: Unit, dtTicks: number, ctx: SimCtx): Unit {
       node = r.node;
       timeLeft -= r.used * spd.ticksPerTile;
       if (node < path.length) break; // still travelling; time spent
+      // Arrived: settle on the tile centre so the worker mines/chops/fishes (or
+      // deposits) standing on a tile, never between two. An empty path (already
+      // on the target tile) otherwise leaves it at a fractional mid-tile spot.
+      x = Math.round(x);
+      y = Math.round(y);
       phase = phase === "toWork" ? "working" : "storing";
     } else if (phase === "working") {
       if (!workTileValid(ctx, resource, wx, wy)) {
@@ -989,6 +1006,13 @@ function advanceField(unit: Unit, dtTicks: number, ctx: SimCtx): Unit {
     if (node >= path.length) phase = "working";
   }
 
+  // Tend the field from the tile centre, not a fractional mid-tile spot — an
+  // empty path (already on the tile) otherwise leaves the worker off-centre.
+  if (phase === "working") {
+    x = Math.round(x);
+    y = Math.round(y);
+  }
+
   if (phase === "working" && timeLeft > 0) {
     workTicks += timeLeft;
     if (workTicks >= FIELD_DURATION[action]) {
@@ -1014,6 +1038,8 @@ const FIELD_DURATION: Record<FieldAction, number> = {
 function completeField(ctx: SimCtx, action: FieldAction, tx: number, ty: number): void {
   if (action === "plough") {
     const tile = tileAt(ctx.map, tx, ty);
+    // The town flower is reserved (req §18) — never plough it into a field.
+    if (isTownTile(ctx.town, tx, ty)) return;
     if ((tile === "grass" || tile === "stump") && !fieldAt(ctx.fields, tx, ty)) {
       const id = ctx.nextId++;
       ctx.fields[id] = makeField(id, tx, ty);
@@ -1584,7 +1610,7 @@ function taxDemand(
       base = (c.perHouse ?? 0) * buildingCount(ctx, "house");
       break;
     case "animal":
-      base = (c.perHorse ?? 0) * mountedUnitCount(units);
+      base = (c.perHorse ?? 0) * totalHorseCount(units, ctx.horses);
       break;
     case "wealth":
       base = Math.floor(r.gold / (c.goldDivisor ?? 1)) + (c.perDiamond ?? 0) * r.diamond;
@@ -1789,7 +1815,7 @@ function spawnUnitNearHall(ctx: SimCtx, units: Record<number, Unit>, kind: UnitK
 function freeGrassNearBuildings(ctx: SimCtx): TileCoord | null {
   for (const b of Object.values(ctx.buildings)) {
     for (const n of hexNeighbors(b.x, b.y)) {
-      if (placementValid(ctx.map, ctx.buildings, ctx.fields, "house", n.x, n.y)) return n;
+      if (placementValid(ctx.map, ctx.buildings, ctx.fields, "house", n.x, n.y, ctx.town)) return n;
     }
   }
   return null;
@@ -2016,7 +2042,7 @@ export function applyMiscTrade(
 
 // --- Build / repair (req §7, §7.1) ---
 //
-// The build order targets either a Building (positive id) or a hay-field tile
+// The build order targets either a Building (positive id) or a Stables tile
 // feature (encoded as the *negative* of the Field id, so the order shape can
 // stay flat). advanceBuild routes to the right branch and accumulates progress
 // at 1 tick per builder per simulation tick — two workers on the same site
@@ -2040,6 +2066,16 @@ function advanceBuild(unit: Unit, dtTicks: number, ctx: SimCtx): Unit {
     node = r.node;
     timeLeft -= r.used * spd.ticksPerTile;
     if (node >= path.length) phase = "working";
+  }
+
+  // A builder only works while centred on a tile (req §7.1). When the build site
+  // is the unit's own tile the path is empty and stepPath leaves it wherever it
+  // happened to stop (e.g. mid-tile after a march), so snap to the tile centre
+  // before any construction progress accrues — otherwise a building (a Mine in
+  // particular) can finish with its builder standing between tiles.
+  if (phase === "working") {
+    x = Math.round(x);
+    y = Math.round(y);
   }
 
   if (buildingId >= 0) {
@@ -2071,20 +2107,20 @@ function advanceBuild(unit: Unit, dtTicks: number, ctx: SimCtx): Unit {
       }
     }
   } else {
-    // Hay-field target. buildingId is `-fieldId`.
+    // Stables target. buildingId is `-fieldId`.
     const fid = -buildingId;
     const f = ctx.fields[fid];
-    if (!f || f.stage !== "hayBuilding") {
+    if (!f || f.stage !== "stablesBuilding") {
       return { ...unit, x, y, order: { type: "idle" } };
     }
     if (phase === "working" && timeLeft > 0) {
-      const hayTotal = HAY_FIELD_BUILD_TICKS * festivalWorkMult(ctx);
-      const newProgress = Math.min(hayTotal, f.buildProgress + timeLeft);
-      const matured = newProgress >= hayTotal;
+      const stablesTotal = STABLES_BUILD_TICKS * festivalWorkMult(ctx);
+      const newProgress = Math.min(stablesTotal, f.buildProgress + timeLeft);
+      const matured = newProgress >= stablesTotal;
       ctx.fields[fid] = {
         ...f,
         buildProgress: newProgress,
-        stage: matured ? "hayMature" : "hayBuilding",
+        stage: matured ? "stablesMature" : "stablesBuilding",
       };
       if (matured) return { ...unit, x, y, order: { type: "idle" } };
     }
@@ -2203,15 +2239,15 @@ function advanceAttack(unit: Unit, dtTicks: number, ctx: SimCtx): Unit {
 }
 
 // --- Horse stabling capacity (req §9) ---
-// Each mature hay field stables HAY_FIELD_HORSE_CAPACITY horses. A horse can
+// Each mature Stables houses STABLES_HORSE_CAPACITY horses. A horse can
 // only be bought while at least one stable slot is free; a horse occupies a slot
 // for as long as it's alive (`horseHp > 0`).
 
-// Total horses the hamlet's mature hay fields can stable.
+// Total horses the hamlet's mature Stables can house.
 export function horseStableCapacity(fields: Record<number, Field>): number {
   let mature = 0;
-  for (const f of Object.values(fields)) if (f.stage === "hayMature") mature++;
-  return mature * HAY_FIELD_HORSE_CAPACITY;
+  for (const f of Object.values(fields)) if (f.stage === "stablesMature") mature++;
+  return mature * STABLES_HORSE_CAPACITY;
 }
 
 // How many units are currently mounted (each occupies one stable slot).
@@ -2221,12 +2257,162 @@ export function mountedUnitCount(units: Record<number, Unit>): number {
   return n;
 }
 
+// Every horse the hamlet owns counts against stable capacity (req §9): the ones
+// being ridden (`Unit.horseHp`) plus the riderless ones waiting at/walking to a
+// Stables. Dismount and mount just move a horse between these two pools, so the
+// total — and therefore stable usage — is conserved.
+export function totalHorseCount(
+  units: Record<number, Unit>,
+  horses: Record<number, Horse>,
+): number {
+  return mountedUnitCount(units) + Object.keys(horses).length;
+}
+
 // Is there a free stable slot for one more horse? (req §9 — blocks the purchase.)
 export function hasFreeStable(
   units: Record<number, Unit>,
   fields: Record<number, Field>,
+  horses: Record<number, Horse>,
 ): boolean {
-  return mountedUnitCount(units) < horseStableCapacity(fields);
+  return totalHorseCount(units, horses) < horseStableCapacity(fields);
+}
+
+// Is (x, y) a mature Stables tile a horse can park on?
+function onMatureStables(ctx: SimCtx, x: number, y: number): boolean {
+  const f = fieldAt(ctx.fields, x, y);
+  return !!f && f.stage === "stablesMature";
+}
+
+// The nearest mature-Stables tile reachable from (x, y), or null when there is
+// none (no Stables built, or none with a valid path). Ties break on hex distance.
+function nearestStablesTile(ctx: SimCtx, x: number, y: number): TileCoord | null {
+  const cands = Object.values(ctx.fields)
+    .filter((f) => f.stage === "stablesMature")
+    .map((f) => ({ x: f.x, y: f.y, d: hexDistance({ x, y }, { x: f.x, y: f.y }) }))
+    .sort((a, b) => a.d - b.d);
+  for (const c of cands) {
+    if (c.x === x && c.y === y) return { x: c.x, y: c.y };
+    if (findPath(ctx.map, { x, y }, { x: c.x, y: c.y }, ctx.buildings)) return { x: c.x, y: c.y };
+  }
+  return null;
+}
+
+// A riderless horse trots home at the mounted travel speed (req §9).
+const HORSE_TILES_PER_TICK = TILES_PER_TICK * HORSE_SPEED_MULT;
+
+// Dismount (req §9): the rider gives up its horse. The horse appears at the
+// unit's tile as a riderless entity (keeping its buffer HP) and is routed to the
+// nearest Stables; the unit drops to foot stats but keeps its current order.
+export function startDismount(ctx: SimCtx, unit: Unit): Unit {
+  if (!hasHorse(unit)) return unit;
+  const hx = Math.round(unit.x);
+  const hy = Math.round(unit.y);
+  const dest = nearestStablesTile(ctx, hx, hy);
+  const path = dest ? findPath(ctx.map, { x: hx, y: hy }, dest, ctx.buildings) ?? [] : [];
+  const id = ctx.nextId++;
+  ctx.horses[id] = makeHorse(id, hx, hy, unit.horseHp, path);
+  return { ...unit, horseHp: 0 };
+}
+
+// Mount (req §9): build an order that sends the unit to the nearest riderless
+// horse. No-op (keeps the current order) if the unit already has a horse or no
+// reachable horse exists.
+export function startMount(ctx: SimCtx, unit: Unit): Order {
+  if (hasHorse(unit)) return unit.order;
+  const ux = Math.round(unit.x);
+  const uy = Math.round(unit.y);
+  let best: Horse | null = null;
+  let bestPath: TileCoord[] | null = null;
+  let bestD = Infinity;
+  for (const h of Object.values(ctx.horses)) {
+    const d = hexDistance({ x: ux, y: uy }, { x: Math.round(h.x), y: Math.round(h.y) });
+    if (d >= bestD) continue;
+    const path =
+      d <= 1
+        ? []
+        : pathFromUnit(ctx.map, unit, { x: Math.round(h.x), y: Math.round(h.y) }, ctx.buildings) ??
+          pathAdjacentTo(ctx.map, unit, Math.round(h.x), Math.round(h.y), ctx.buildings);
+    if (!path) continue;
+    best = h;
+    bestPath = path;
+    bestD = d;
+  }
+  if (!best || !bestPath) return unit.order;
+  return { type: "mount", horseId: best.id, path: bestPath, node: 0 };
+}
+
+// Advance a `mount` order: walk toward the target horse and climb on once
+// adjacent, consuming the horse entity and reclaiming its buffer HP. If the
+// horse has moved on (still trotting to the stables) the path is recomputed; the
+// order ends if the horse is gone (taken by someone else) or unreachable.
+function advanceMount(unit: Unit, dtTicks: number, ctx: SimCtx): Unit {
+  const o = unit.order;
+  if (o.type !== "mount") return unit;
+  const horse = ctx.horses[o.horseId];
+  if (!horse) return { ...unit, order: { type: "idle" } };
+
+  const spd = moveSpeed(unit);
+  const r = stepPath(unit.x, unit.y, o.path, o.node, dtTicks * spd.tilesPerTick);
+  const x = r.x;
+  const y = r.y;
+
+  const adjacent =
+    hexDistance({ x: Math.round(x), y: Math.round(y) }, { x: Math.round(horse.x), y: Math.round(horse.y) }) <= 1;
+  if (adjacent) {
+    delete ctx.horses[horse.id]; // absorbed back into the rider
+    return { ...unit, x: Math.round(x), y: Math.round(y), horseHp: horse.hp, order: { type: "idle" } };
+  }
+  if (r.node >= o.path.length) {
+    // Reached the end of the path but the horse moved — chase its new tile.
+    const np =
+      pathFromUnit(ctx.map, { ...unit, x, y }, { x: Math.round(horse.x), y: Math.round(horse.y) }, ctx.buildings) ??
+      pathAdjacentTo(ctx.map, { ...unit, x, y }, Math.round(horse.x), Math.round(horse.y), ctx.buildings);
+    if (!np) return { ...unit, x, y, order: { type: "idle" } };
+    return { ...unit, x, y, order: { type: "mount", horseId: horse.id, path: np, node: 0 } };
+  }
+  return { ...unit, x, y, order: { type: "mount", horseId: horse.id, path: o.path, node: r.node } };
+}
+
+// Advance one riderless horse (req §9): trot along its route to the nearest
+// Stables and park there. A horse with no route (e.g. dismounted before any
+// Stables existed) re-checks for one each step and sets off once it can.
+function advanceHorse(horse: Horse, dtTicks: number, ctx: SimCtx): Horse {
+  if (horse.stabled) return horse;
+  let { x, y, node, path } = horse;
+
+  if (node >= path.length) {
+    const rx = Math.round(x);
+    const ry = Math.round(y);
+    if (onMatureStables(ctx, rx, ry)) {
+      return { ...horse, x: rx, y: ry, path: [], node: 0, stabled: true };
+    }
+    const dest = nearestStablesTile(ctx, rx, ry);
+    if (!dest) return horse; // nowhere to go yet — wait in place
+    const p = findPath(ctx.map, { x: rx, y: ry }, dest, ctx.buildings);
+    if (!p || p.length === 0) return horse;
+    path = p;
+    node = 0;
+  }
+
+  const r = stepPath(x, y, path, node, HORSE_TILES_PER_TICK * dtTicks);
+  x = r.x;
+  y = r.y;
+  node = r.node;
+  if (node >= path.length) {
+    const sx = Math.round(x);
+    const sy = Math.round(y);
+    const parked = onMatureStables(ctx, sx, sy);
+    return { ...horse, x: sx, y: sy, node, path: parked ? [] : path, stabled: parked };
+  }
+  return { ...horse, x, y, node, path };
+}
+
+// Advance every riderless horse one step (req §9). Called from update() each tick.
+export function advanceHorses(ctx: SimCtx, dtTicks: number): void {
+  for (const key of Object.keys(ctx.horses)) {
+    const id = Number(key);
+    ctx.horses[id] = advanceHorse(ctx.horses[id], dtTicks, ctx);
+  }
 }
 
 // --- Trade: travel to town, then exchange goods at listed values (req §18) ---
@@ -2249,9 +2435,16 @@ function advanceTrade(unit: Unit, dtTicks: number, ctx: SimCtx, units: Record<nu
     if (node >= path.length) phase = "trading";
   }
 
+  // Trade (and then rest) from the tile centre, not a fractional mid-tile spot —
+  // an empty path (already at the town tile) otherwise leaves the unit off-centre.
   if (phase === "trading") {
-    // A horse may only be bought when a hay-field stable slot is free (req §9).
-    const canHorse = buyHorse && hasFreeStable(units, ctx.fields);
+    x = Math.round(x);
+    y = Math.round(y);
+  }
+
+  if (phase === "trading") {
+    // A horse may only be bought when a Stables slot is free (req §9).
+    const canHorse = buyHorse && hasFreeStable(units, ctx.fields, ctx.horses);
     return resolveTrade({ ...unit, x, y }, sell, buy, canHorse);
   }
 
@@ -2314,9 +2507,10 @@ function resolveTrade(
 // automatic `trade` order above, these resolve instantly against a unit already
 // at town — no travel, no `order` change.
 
-// Is the unit on the town tile to use the marketplace?
+// Is the unit standing on any of the seven town tiles (req §18)? Trading works
+// from anywhere in the town flower, not just the central market tile.
 export function isUnitAtTown(unit: Unit, town: TileCoord): boolean {
-  return hexDistance({ x: Math.round(unit.x), y: Math.round(unit.y) }, town) === 0;
+  return isTownTile(town, Math.round(unit.x), Math.round(unit.y));
 }
 
 // Move `amount` of one resource between the unit's inventory and town storage
@@ -2341,6 +2535,7 @@ export function executeTownStore(
     return { ...unit, carrying };
   }
   // Town → unit, bounded by both town stock and free carry slots.
+  if (!canCarryResource(unit, resource)) return unit; // captains take only gold/diamond (§6.1)
   const room = Math.max(0, carryCap(unit) - carriedTotal(unit.carrying));
   const move = Math.min(amount, ctx.townStorage[resource], room);
   if (move <= 0) return unit;
@@ -2391,9 +2586,15 @@ export function evaluateTownTrade(
   if (cartCount === 0 && !wantHorse) {
     return { ...base, reason: "Cart is empty" };
   }
-  // A horse needs a free hay-field stable slot (req §9).
+  // Captains can only carry gold and diamonds home (req §6.1).
+  for (const t of RESOURCE_TYPES) {
+    if ((cart[t] ?? 0) > 0 && !canCarryResource(unit, t)) {
+      return { ...base, reason: "Captains can carry only gold and diamonds" };
+    }
+  }
+  // A horse needs a free Stables slot (req §9).
   if (wantHorse && !freeStable) {
-    return { ...base, reason: "No free stable — build/grow a hay field first" };
+    return { ...base, reason: "No free stable — build a Stables first" };
   }
   // Offer must be backed by goods actually on hand.
   for (const t of RESOURCE_TYPES) {
@@ -2436,7 +2637,7 @@ export function executeTownTrade(
   units: Record<number, Unit>,
 ): Unit | null {
   if (!isUnitAtTown(unit, ctx.town)) return null;
-  const freeStable = hasFreeStable(units, ctx.fields);
+  const freeStable = hasFreeStable(units, ctx.fields, ctx.horses);
   const ev = evaluateTownTrade(unit, ctx.townStorage, cart, buyHorse, offerUnit, offerStorage, freeStable);
   if (!ev.ok) return null;
 
@@ -2500,6 +2701,7 @@ export function executeHallStore(
     return { ...unit, carrying };
   }
   // Pool → unit, bounded by both the pool stock and free carry slots.
+  if (!canCarryResource(unit, resource)) return unit; // captains take only gold/diamond (§6.1)
   const room = Math.max(0, carryCap(unit) - carriedTotal(unit.carrying));
   const move = Math.min(amount, ctx.resources[resource], room);
   if (move <= 0) return unit;
@@ -2532,7 +2734,7 @@ export function advanceBuildings(
     const op = units[b.occupantId];
     if (!op || op.insideBuildingId !== id) continue;
 
-    if (b.kind === "smithy") tickSmithy(ctx, id, dtTicks, op);
+    if (b.kind === "smithy") tickSmithy(ctx, id, dtTicks, units);
     else if (b.kind === "barracks") tickBarracks(ctx, id, dtTicks, units);
   }
 }
@@ -2578,15 +2780,16 @@ function freeAdjacentTile(
   return null;
 }
 
-function tickSmithy(ctx: SimCtx, id: number, dtTicks: number, op: Unit): void {
+function tickSmithy(ctx: SimCtx, id: number, dtTicks: number, units: Record<number, Unit>): void {
   let b = ctx.buildings[id];
+  if (b.occupantId === null) return;
+  const op = units[b.occupantId];
   // The order is what tells the smithy which item to make; the operator's
   // order is the source of truth so cancellation is a single edit.
-  const order = op.order;
-  if (order.type !== "operate") return;
+  if (!op || op.order.type !== "operate") return;
   const item: CraftItem | null =
-    order.mode === "craftSword" ? "sword"
-    : order.mode === "craftShield" ? "shield"
+    op.order.mode === "craftSword" ? "sword"
+    : op.order.mode === "craftShield" ? "shield"
     : null;
   if (!item) return;
   if (b.craftItem !== item) {
@@ -2595,26 +2798,24 @@ function tickSmithy(ctx: SimCtx, id: number, dtTicks: number, op: Unit): void {
     ctx.buildings[id] = b;
   }
   const craftTotal = CRAFT_TICKS[item] * festivalWorkMult(ctx);
-  let remaining = dtTicks;
-  while (remaining > 0) {
-    const need = craftTotal - b.craftProgress;
-    if (remaining < need) {
-      ctx.buildings[id] = { ...b, craftProgress: b.craftProgress + remaining };
-      return;
-    }
-    // One item's worth of progress has accumulated. Deduct cost if we can
-    // afford it and post the output; otherwise stall progress at the cap.
-    const cost = CRAFT_COST[item];
-    if (!canAfford(ctx.resources, cost)) {
-      ctx.buildings[id] = { ...b, craftProgress: craftTotal };
-      return;
-    }
-    payCost(ctx.resources, cost);
-    ctx.equipment[item]++;
-    remaining -= need;
-    b = { ...b, craftProgress: 0 };
-    ctx.buildings[id] = b;
+  const need = craftTotal - b.craftProgress;
+  if (dtTicks < need) {
+    ctx.buildings[id] = { ...b, craftProgress: b.craftProgress + dtTicks };
+    return;
   }
+  // One item's worth of progress has accumulated. Deduct cost if we can afford
+  // it and post the output; otherwise stall progress at the cap.
+  const cost = CRAFT_COST[item];
+  if (!canAfford(ctx.resources, cost)) {
+    ctx.buildings[id] = { ...b, craftProgress: craftTotal };
+    return;
+  }
+  payCost(ctx.resources, cost);
+  ctx.equipment[item]++;
+  // A craft order makes exactly one item then stops (req §7.2): eject the
+  // operator to stand idle and free the smithy, rather than looping production.
+  units[op.id] = { ...op, insideBuildingId: null, order: { type: "idle" }, x: b.x, y: b.y };
+  ctx.buildings[id] = { ...b, occupantId: null, craftItem: null, craftProgress: 0 };
 }
 
 function tickBarracks(

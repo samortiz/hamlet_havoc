@@ -43,6 +43,9 @@ export interface View {
   placement: PlacementGhost | null;
   hoveredUnitId: number | null;
   hoveredBuildingId: number | null;
+  // Wood remaining on the hovered forest tile (req §12); null when the cursor
+  // isn't over a forest (or is over a unit, which takes tooltip precedence).
+  hoveredForestWood: number | null;
   mouseScreenX: number;
   mouseScreenY: number;
 }

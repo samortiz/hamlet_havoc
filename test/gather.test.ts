@@ -169,6 +169,29 @@ describe("mining", () => {
     s = update(s, [{ type: "gather", unitIds: [id], tx: mountain.x, ty: mountain.y }], 1);
     expect(s.units[id].order.type).toBe("idle");
   });
+
+  it("snaps a miner to the tile centre when it mines from its own tile (req §13)", () => {
+    let s = createInitialState(777);
+    const id = firstWorkerId(s);
+    const w = s.units[id];
+    const mountain = findNearestTile(s, "mountain", w.x, w.y)!;
+    // Build the mine first so the mountain is both mineable and walkable.
+    s = { ...s, resources: { ...s.resources, wood: 6, meat: 8 } };
+    s = update(s, [{ type: "build", unitIds: [id], kind: "mine", tx: mountain.x, ty: mountain.y }], 1);
+    s = update(s, [], TICKS_PER_SECOND * 60);
+
+    // Stand the miner on the mine's own tile but at a fractional position (as if
+    // caught mid-march), then order it to mine. The work tile is its own tile, so
+    // the path is empty and nothing walks it — it must still snap to the centre.
+    s = { ...s, units: { ...s.units, [id]: { ...s.units[id], x: mountain.x + 0.4, y: mountain.y - 0.3 } } };
+    s = update(s, [{ type: "gather", unitIds: [id], tx: mountain.x, ty: mountain.y }], 1);
+
+    expect(s.units[id].order.type).toBe("gather");
+    expect(Number.isInteger(s.units[id].x)).toBe(true);
+    expect(Number.isInteger(s.units[id].y)).toBe(true);
+    expect(s.units[id].x).toBe(mountain.x);
+    expect(s.units[id].y).toBe(mountain.y);
+  });
 });
 
 describe("deposit respects pooled storage capacity (req §8.1)", () => {

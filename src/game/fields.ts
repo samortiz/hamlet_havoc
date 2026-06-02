@@ -1,24 +1,24 @@
-// Tile features — farm fields and hay fields (req §7, §11). Fields are NOT
+// Tile features — farm fields and stables (req §7, §11). Fields are NOT
 // buildings: they are flimsy tile features layered over a grass/stump tile and
-// they don't block walking. Both wheat fields and hay fields live here.
+// they don't block walking. Both wheat fields and stables live here.
 //
 // Wheat-field stages (req §11): ploughed -> planted -> grown -> (harvested
 // back to ploughed for replanting). Plough is a worker action; the field
 // appears the moment ploughing completes.
 //
-// Hay-field stages (req §7, §12+): underConstruction -> mature. Construction
-// takes HAY_FIELD_BUILD_TICKS and costs HAY_FIELD_COST; once mature it yields
-// hay continuously alongside the season cycle.
+// Stables stages (req §7, §12+): underConstruction -> mature. Construction
+// takes STABLES_BUILD_TICKS and costs STABLES_COST; once mature it provides
+// horse stabling capacity alongside the season cycle.
 
 import { FIELD_HP } from "../config/index.js";
 
-export type FieldKind = "wheat" | "hay";
+export type FieldKind = "wheat" | "stables";
 export type FieldStage =
   | "ploughed"
   | "planted"
   | "grown"
-  | "hayBuilding"
-  | "hayMature";
+  | "stablesBuilding"
+  | "stablesMature";
 
 export interface Field {
   id: number;
@@ -28,7 +28,7 @@ export interface Field {
   stage: FieldStage;
   hp: number;
   plantedTick: number; // wheat: when planting happened; drives growth timing
-  buildProgress: number; // hay: ticks accumulated toward construction
+  buildProgress: number; // stables: ticks accumulated toward construction
 }
 
 export function makeField(
@@ -42,7 +42,7 @@ export function makeField(
     kind,
     x,
     y,
-    stage: kind === "wheat" ? "ploughed" : "hayBuilding",
+    stage: kind === "wheat" ? "ploughed" : "stablesBuilding",
     hp: FIELD_HP,
     plantedTick: 0,
     buildProgress: 0,

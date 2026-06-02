@@ -162,7 +162,7 @@ export function createTownPanel(opts: {
       r.append(val, btn("+", () => { cart[t] = (cart[t] ?? 0) + 1; }, { title: "Add one to cart" }));
       sale.body.append(r);
     }
-    const freeStable = hasFreeStable(state.units, state.fields);
+    const freeStable = hasFreeStable(state.units, state.fields, state.horses);
     {
       const r = row("Horse 🐴");
       const val = document.createElement("span");
@@ -176,7 +176,7 @@ export function createTownPanel(opts: {
           title: mounted
             ? "Already mounted"
             : !freeStable
-              ? "No free stable — build/grow a hay field first (§9)"
+              ? "No free stable — build a Stables first (§9)"
               : "Add a horse to cart",
         }),
       );

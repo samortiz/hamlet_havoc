@@ -40,6 +40,8 @@
           <button id="btn-save" type="button">Save</button>
           <button id="btn-load" type="button">Load</button>
         </div>
+        <!-- Game speed buttons (req §15.1): ¼×–4×; populated by hud.ts. -->
+        <div id="hud-speed" title="Game speed ([ slower / ] faster)"></div>
         <!-- Town marketplace interface (req §18): shown when a unit reaches town. -->
         <!-- Populated by ui/town.ts; pointer-events enabled so it's interactive. -->
         <div id="town-panel" hidden></div>
@@ -63,6 +65,11 @@
         <div id="building-tooltip" hidden>
           <div id="bt-title"></div>
           <div id="bt-body"></div>
+        </div>
+        <!-- Forest tooltip: shows remaining wood on hover; positioned by hud.ts. -->
+        <div id="forest-tooltip" hidden>
+          <div id="ft-title">Forest</div>
+          <div id="ft-wood"></div>
         </div>
         <div id="hud-debug">
           <span id="hud-tick">tick 0</span>

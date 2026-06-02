@@ -40,7 +40,7 @@ test("a unit travels to town, buys a horse, and then moves faster", async ({ pag
   await page.goto("/");
   await expect(page.locator("#world")).toBeVisible();
 
-  // Give the first unit goods worth a horse (4 meat = 20 value) and send it to
+  // Give the first unit goods worth a horse (5 meat = 20 value) and send it to
   // town to buy one. tick() fast-forwards the long walk + the trade.
   await page.evaluate(() => {
     const g = window.__game!;
@@ -49,9 +49,15 @@ test("a unit travels to town, buys a horse, and then moves faster", async ({ pag
     // boundary) doesn't starve the workers or the freshly-bought horse.
     s.resources.wheat = 20;
     s.resources.meat = 20;
+    // A horse needs a free Stables slot (req §9); plant a mature one in the clearing.
+    const fid = s.nextEntityId++;
+    const cx = Math.floor(s.map.width / 2);
+    const cy = Math.floor(s.map.height / 2);
+    s.fields[fid] = { id: fid, kind: "stables", x: cx + 3, y: cy,
+      stage: "stablesMature", hp: 5, plantedTick: 0, buildProgress: 0 };
     const id = Number(Object.keys(s.units)[0]);
-    s.units[id].carrying = { meat: 4 };
-    g.enqueue({ type: "trade", unitIds: [id], sell: { meat: 4 }, buy: {}, buyHorse: true });
+    s.units[id].carrying = { meat: 5 };
+    g.enqueue({ type: "trade", unitIds: [id], sell: { meat: 5 }, buy: {}, buyHorse: true });
     g.tick(30 * 90); // ample time to reach the far town and trade
   });
 
@@ -61,7 +67,7 @@ test("a unit travels to town, buys a horse, and then moves faster", async ({ pag
       const id = Number(Object.keys(s.units)[0]);
       return s.units[id].horseHp;
     }))
-    .toBe(3);
+    .toBe(10); // HORSE_BONUS_HP
 
   // The mounted unit now out-runs an un-mounted one over the same move.
   const dist = await page.evaluate(() => {
@@ -98,15 +104,21 @@ test("the town interface opens at town, stores goods, and trades for a horse (re
   await page.goto("/");
   await expect(page.locator("#world")).toBeVisible();
 
-  // Drop the first worker onto the town tile carrying 4 meat (20 value). The
+  // Drop the first worker onto the town tile carrying 5 meat (20 value). The
   // marketplace panel auto-opens for an idle unit standing at town.
   await page.evaluate(() => {
     const g = window.__game!;
     const s = g.getState();
+    // A horse needs a free Stables slot (req §9); plant a mature one in the clearing.
+    const fid = s.nextEntityId++;
+    const cx = Math.floor(s.map.width / 2);
+    const cy = Math.floor(s.map.height / 2);
+    s.fields[fid] = { id: fid, kind: "stables", x: cx + 3, y: cy,
+      stage: "stablesMature", hp: 5, plantedTick: 0, buildProgress: 0 };
     const id = Number(Object.keys(s.units)[0]);
     s.units[id].x = s.town.x;
     s.units[id].y = s.town.y;
-    s.units[id].carrying = { meat: 4 };
+    s.units[id].carrying = { meat: 5 };
     g.tick(1);
   });
 
@@ -114,20 +126,20 @@ test("the town interface opens at town, stores goods, and trades for a horse (re
   await expect(panel).toBeVisible();
   await expect(panel.locator(".town-title")).toContainText("Town Marketplace");
 
-  // Store all 4 meat into town storage (shift-click moves the whole stack).
+  // Store all 5 meat into town storage (shift-click moves the whole stack).
   const invCol = panel.locator(".town-col", { hasText: "Carrying" });
   await invCol.locator(".town-row", { hasText: "Meat" }).getByRole("button", { name: "Store" })
     .click({ modifiers: ["Shift"] });
 
   await expect
     .poll(() => page.evaluate(() => window.__game!.getState().townStorage.meat))
-    .toBe(4);
+    .toBe(5);
 
-  // Now buy a horse, paying with the 4 meat (20 value) sitting in town storage.
+  // Now buy a horse, paying with the 5 meat (20 value) sitting in town storage.
   const storeCol = panel.locator(".town-col", { hasText: "Town Storage" });
   const meatOfferPlus = storeCol.locator(".town-row", { hasText: "Meat" })
     .locator(".town-offer-stepper").getByRole("button", { name: "+" });
-  for (let i = 0; i < 4; i++) await meatOfferPlus.click();
+  for (let i = 0; i < 5; i++) await meatOfferPlus.click();
 
   await panel.locator(".town-col", { hasText: "For Sale" })
     .locator(".town-row", { hasText: "Horse" }).getByRole("button", { name: "+" }).click();
@@ -140,7 +152,7 @@ test("the town interface opens at town, stores goods, and trades for a horse (re
       const id = Number(Object.keys(s.units)[0]);
       return s.units[id].horseHp;
     }))
-    .toBe(3);
+    .toBe(10); // HORSE_BONUS_HP
 
   // The horse was paid for out of town storage.
   await expect

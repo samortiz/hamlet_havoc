@@ -10,7 +10,10 @@
 import {
   advanceBuildings,
   advanceFieldGrowth,
+  advanceHorses,
   advanceUnit,
+  startDismount,
+  startMount,
   buildableCost,
   canAfford,
   payCost,
@@ -50,6 +53,7 @@ import {
 import { stepCombat, stepEnemyAI, type Enemy } from "./combat.js";
 import type { Command } from "./commands.js";
 import { makeField, type Field } from "./fields.js";
+import type { Horse } from "./horses.js";
 import type { GameMap } from "./map.js";
 import { fieldActionInSeason, seasonAt, seasonBoundaries } from "./season.js";
 import { MAX_NOTIFICATIONS, type EquipmentPool, type GameState, type GroundItem } from "./state.js";
@@ -69,6 +73,7 @@ export function update(
   const fields: Record<number, Field> = { ...state.fields };
   const enemies: Record<number, Enemy> = { ...state.enemies };
   const groundItems: Record<number, GroundItem> = { ...state.groundItems };
+  const horses: Record<number, Horse> = { ...state.horses };
   const equipment: EquipmentPool = { ...state.equipment };
   const townStorage = { ...state.townStorage };
 
@@ -97,6 +102,7 @@ export function update(
     fields,
     enemies,
     groundItems,
+    horses,
     equipment,
     town: state.town,
     townStorage,
@@ -134,6 +140,10 @@ export function update(
       const id = Number(key);
       units[id] = advanceUnit(units[id], dtTicks, ctx, units);
     }
+
+    // 2.5) Riderless horses (req §9): trot toward the nearest Stables and park.
+    // After the unit pass so a just-dismounted horse moves the same step.
+    advanceHorses(ctx, dtTicks);
 
     // 3) Per-building work (smithy crafting, barracks training).
     advanceBuildings(ctx, dtTicks, units);
@@ -189,6 +199,7 @@ export function update(
     fields: ctx.fields,
     enemies: ctx.enemies,
     groundItems: ctx.groundItems,
+    horses: ctx.horses,
     resources: ctx.resources,
     equipment: ctx.equipment,
     townStorage: ctx.townStorage,
@@ -389,6 +400,24 @@ function handleCommand(cmd: Command, ctx: SimCtx, units: Record<number, Unit>): 
     if (updated) units[cmd.unitId] = updated;
     return;
   }
+  if (cmd.type === "dismount") {
+    // The unit keeps its current order; only the horse leaves (req §9).
+    for (const id of cmd.unitIds) {
+      const u = units[id];
+      if (!u) continue;
+      units[id] = startDismount(ctx, u);
+    }
+    return;
+  }
+  if (cmd.type === "mount") {
+    for (const id of cmd.unitIds) {
+      const u = units[id];
+      if (!u) continue;
+      ejectIfInside(u, ctx);
+      units[id] = { ...u, insideBuildingId: null, order: startMount(ctx, u) };
+    }
+    return;
+  }
   if (cmd.type === "cancel") {
     for (const id of cmd.unitIds) {
       const u = units[id];
@@ -444,15 +473,15 @@ function handleBuildPlacement(
   ctx: SimCtx,
   units: Record<number, Unit>,
 ): void {
-  if (!placementValid(ctx.map, ctx.buildings, ctx.fields, cmd.kind, cmd.tx, cmd.ty)) return;
+  if (!placementValid(ctx.map, ctx.buildings, ctx.fields, cmd.kind, cmd.tx, cmd.ty, ctx.town)) return;
   const cost = buildableCost(cmd.kind);
   if (!canAfford(ctx.resources, cost)) return;
   payCost(ctx.resources, cost);
 
-  if (cmd.kind === "hayField") {
+  if (cmd.kind === "stables") {
     const id = ctx.nextId++;
-    ctx.fields[id] = makeField(id, cmd.tx, cmd.ty, "hay");
-    // Encode "build hay-field F" as negative id in the order. Each builder
+    ctx.fields[id] = makeField(id, cmd.tx, cmd.ty, "stables");
+    // Encode "build Stables F" as negative id in the order. Each builder
     // walks to the field tile and accumulates progress.
     for (const uid of cmd.unitIds) {
       const u = units[uid];

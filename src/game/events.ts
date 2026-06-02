@@ -239,13 +239,16 @@ export function isMiscGood(kind: MiscEventKind): boolean {
 export function upcomingLabel(ev: UpcomingEvent): string {
   if (ev.category === "attack") return "Attack";
   if (ev.category === "tax") return "Tax Collector";
-  return MISC_LABEL[ev.misc];
+  // Misc: only the type is revealed in advance (§16.0, §19.1). The specific
+  // named event (and whether it's good or bad) stays hidden until it fires.
+  return "Misc";
 }
 
 export function upcomingIcon(ev: UpcomingEvent): string {
   if (ev.category === "attack") return "⚔️";
   if (ev.category === "tax") return "💰";
-  return isMiscGood(ev.misc) ? "✨" : "☠️";
+  // Neutral icon — see upcomingLabel: the Misc kind is hidden until it fires.
+  return "❓";
 }
 
 // The categories making up the rolling block that contains `year` (§16.0):

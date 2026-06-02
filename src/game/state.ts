@@ -19,6 +19,7 @@ import {
   type UpcomingEvent,
 } from "./events.js";
 import type { Field } from "./fields.js";
+import type { Horse } from "./horses.js";
 import { generateMap, HAMLET_CENTER, type GameMap, type TileCoord } from "./map.js";
 import { emptyPool, type ResourcePool, type ResourceType } from "./resources.js";
 import { makeWorker, type Unit } from "./units.js";
@@ -82,7 +83,14 @@ import { makeWorker, type Unit } from "./units.js";
 // `attack` ActiveEvent variant is gone. A v18 save paused mid-attack would carry
 // an unresolvable `{phase:"endOfYearEvent", activeEvent:{category:"attack"}}`, so
 // it is rejected on load.
-export const SAVE_VERSION = 19;
+// v20: the "hay field" tile feature was renamed to "Stables" — the serialized
+// `Field.kind` value `"hay"` became `"stables"` and its stages `"hayBuilding"`/
+// `"hayMature"` became `"stablesBuilding"`/`"stablesMature"`. A v19 save still
+// carries the old strings, so it is rejected on load.
+// v21: dismountable horses (req §9) — GameState gains the `horses` map of
+// riderless horse entities (a dismounted mount walks to the nearest Stables to
+// wait). A v20 save lacks the field, so it is rejected on load.
+export const SAVE_VERSION = 21;
 
 // Most recent notifications kept on the state. The UI dedups by id and only
 // toasts ones it hasn't shown yet, so this just bounds save size — older entries
@@ -180,6 +188,10 @@ export interface GameState {
   // Loose resource stacks on the ground (req §6.2), dropped by killed enemies and
   // picked up by units walking over them. Keyed by id (req §2.6).
   groundItems: Record<number, GroundItem>;
+  // Riderless horses (req §9): a dismounted mount becomes one of these and walks
+  // to the nearest Stables to wait to be re-mounted. A *mounted* horse is not
+  // here — it lives as the rider's `horseHp`. Keyed by id (req §2.6).
+  horses: Record<number, Horse>;
   resources: ResourcePool;
   equipment: EquipmentPool;
   // The town marketplace tile (req §18) — a fixed walkable location far from the
@@ -265,6 +277,7 @@ export function createInitialState(seed: number): GameState {
     fields: {},
     enemies: {},
     groundItems: {},
+    horses: {},
     resources,
     equipment: { sword: 0, shield: 0 },
     town: gen.town,

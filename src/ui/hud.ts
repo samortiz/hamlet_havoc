@@ -8,6 +8,7 @@ import {
   BARRACKS_HOUSING_CAPACITY,
   BUILD_TICKS,
   CRAFT_TICKS,
+  GAME_SPEEDS,
   HOUSE_HOUSING_CAPACITY,
   MAP_WIDTH,
   TRAIN_TICKS,
@@ -40,11 +41,20 @@ export interface HudCallbacks {
   // to the combat (and unpauses, since the player is now looking at it).
   onPause: () => void;
   onJumpTo: (x: number, y: number) => void;
+  // Set the game-speed multiplier (req §15.4).
+  onSetSpeed: (speed: number) => void;
 }
 
 export interface Hud {
-  update: (state: GameState, paused: boolean, view: View) => void;
+  update: (state: GameState, paused: boolean, view: View, speed: number) => void;
   flash: (message: string) => void;
+}
+
+// Compact label for a speed multiplier: ¼× · ½× · 1× · 2× · 4×.
+function speedLabel(speed: number): string {
+  if (speed === 0.25) return "¼×";
+  if (speed === 0.5) return "½×";
+  return `${speed}×`;
 }
 
 const RESOURCE_LABEL: Record<ResourceType, string> = {
@@ -89,6 +99,8 @@ function describeOrder(order: Order): string {
       return "Operating";
     case "attack":
       return "Attacking";
+    case "mount":
+      return "Going to mount";
     case "trade":
       return order.phase === "toTown" ? "Going to town" : "Trading";
   }
@@ -117,11 +129,11 @@ function describeBuilding(state: GameState, b: Building): { title: string; lines
 
   if (!isBuilt(b)) {
     lines.push(`Under construction ${pct(b.progress, BUILD_TICKS[b.kind])}%`);
-    lines.push(`HP ${b.hp}/${b.maxHp}`);
+    lines.push(`HP ${Math.round(b.hp)}/${b.maxHp}`);
     return { title, lines };
   }
 
-  lines.push(`HP ${b.hp}/${b.maxHp}`);
+  lines.push(`HP ${Math.round(b.hp)}/${b.maxHp}`);
   const storage = buildingStorage(b.kind);
   if (storage > 0) lines.push(`Storage +${storage}`);
 
@@ -169,6 +181,8 @@ export function createHud(cb: HudCallbacks): Hud {
   const buildingTooltipEl = el("building-tooltip");
   const btTitle = el("bt-title");
   const btBody = el("bt-body");
+  const forestTooltipEl = el("forest-tooltip");
+  const ftWood = el("ft-wood");
 
   // Build one cell per resource, before the storage readout.
   const countEls = {} as Record<ResourceType, HTMLElement>;
@@ -189,6 +203,22 @@ export function createHud(cb: HudCallbacks): Hud {
   el("btn-new").addEventListener("click", cb.onNew);
   el("btn-save").addEventListener("click", cb.onSave);
   el("btn-load").addEventListener("click", cb.onLoad);
+
+  // Game-speed buttons (req §15.4). Built once; the active one is highlighted
+  // each frame from the loop's current multiplier.
+  const speedEl = el("hud-speed");
+  const speedButtons: Array<[number, HTMLButtonElement]> = [];
+  for (const s of GAME_SPEEDS) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.textContent = speedLabel(s);
+    btn.addEventListener("click", () => cb.onSetSpeed(s));
+    speedEl.append(btn);
+    speedButtons.push([s, btn]);
+  }
+  function updateSpeedButtons(speed: number): void {
+    for (const [s, btn] of speedButtons) btn.classList.toggle("active", s === speed);
+  }
 
   // Combat alert: clicking it jumps to the gravest threat and dismisses it.
   let combatJump: { x: number; y: number } | null = null;
@@ -265,10 +295,10 @@ export function createHud(cb: HudCallbacks): Hud {
 
     const title = u.kind.charAt(0).toUpperCase() + u.kind.slice(1);
     ttTitle.textContent = hasHorse(u) ? `${title} 🐴` : title;
-    const horseHp = hasHorse(u) ? ` (+${u.horseHp} horse)` : "";
+    const horseHp = hasHorse(u) ? ` (+${Math.round(u.horseHp)} horse)` : "";
     const atk = diceRange(unitAttackRange(u));
     const def = diceRange(unitDefense(u));
-    ttHp.textContent = `HP ${u.hp}/${maxHp(u.kind)}${horseHp} · Atk ${atk.min}-${atk.max} · Def ${def.min}-${def.max}`;
+    ttHp.textContent = `HP ${Math.round(u.hp)}/${maxHp(u.kind)}${horseHp} · Atk ${atk.min}-${atk.max} · Def ${def.min}-${def.max}`;
     ttOrder.textContent = describeOrder(u.order);
 
     const items: string[] = [];
@@ -322,6 +352,19 @@ export function createHud(cb: HudCallbacks): Hud {
     buildingTooltipEl.hidden = false;
   }
 
+  // Forest hover tooltip: how much wood is left to harvest from the tile under
+  // the cursor (req §12). Suppressed while a unit or building is hovered.
+  function updateForestTooltip(view: View): void {
+    if (view.hoveredForestWood === null) {
+      forestTooltipEl.hidden = true;
+      return;
+    }
+    const w = view.hoveredForestWood;
+    ftWood.textContent = `Wood: ${w} ${w === 1 ? "unit" : "units"}`;
+    positionTooltip(forestTooltipEl, view);
+    forestTooltipEl.hidden = false;
+  }
+
   // Bottom-centre combat alert: a one-shot toast raised when an attack begins —
   // so an attack far from the camera is never missed — instead of pausing. It
   // auto-hides after 5s, or immediately when clicked (which also jumps the
@@ -360,7 +403,8 @@ export function createHud(cb: HudCallbacks): Hud {
     combatAlertTimer = window.setTimeout(() => (combatAlertEl.hidden = true), 5000);
   }
 
-  function update(state: GameState, paused: boolean, view: View): void {
+  function update(state: GameState, paused: boolean, view: View, speed: number): void {
+    updateSpeedButtons(speed);
     const { season, year, secondsRemaining } = deriveSeason(state.tickCount);
     seasonEl.textContent = `${season}, Year ${year}`;
     timerEl.textContent = `${secondsRemaining}s`;
@@ -386,6 +430,7 @@ export function createHud(cb: HudCallbacks): Hud {
     updateCombatAlert(state);
     updateTooltip(state, view);
     updateBuildingTooltip(state, view);
+    updateForestTooltip(view);
   }
 
   return { update, flash };
