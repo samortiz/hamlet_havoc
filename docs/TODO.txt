@@ -1,8 +1,8 @@
 TODO
 
-T1. Please add a way to adjust the speed that time passes.  We should have 1/4 speed, 1/2 speed, regular, 2x, and 4x as speed options.
+T2. When an end-of-year attack happens.  A message is shown, and we need to pause time until the user clicks to dismiss the message, then time will resume as normal.  This is a little different from an attack when mining or fishing and time is not stopped at all.  I do not want time paused for the whole attack, only pause when the end-of-year dialog is shown.   It should tell the name of the attack and how many enemies are attacking.  A little description of what the attack was based on will help the user to know why they have that count of enemies. 
 
-T2.  Add a way to dismount from a horse.  When a unit dismounts the horse can move to the nearest stables. 
+T3.  When I click in one of the town tiles beside the town center, the unit immediately turns around an heads home.  It should open the town trade dialog instead.  I think this happened when town squares are considered forest and the unit is at carrying capacity. All town squares should be grass so this doesn't happen, any click on any of the town tiles should open the town trading dialog. 
 
-T3. Make the town larger, it should use 7 tiles, and add a few different building graphics from under ~/Downloads/hamlet_havoc_source_images/kenney/
- to make it look more like a town.
+
+

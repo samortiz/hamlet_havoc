@@ -227,8 +227,8 @@ export const WHEAT_HARVEST_MIN = 10;
 export const WHEAT_HARVEST_MAX = 20;
 export const PLANT_WHEAT_COST = 1; // seed per planted tile
 export const PLOUGH_TICKS = ticks(10);
-export const PLANT_TICKS = ticks(10); // planting is quick (10 s)
-export const HARVEST_TICKS = ticks(10);
+export const PLANT_TICKS = ticks(5);
+export const HARVEST_TICKS = ticks(5);
 // Planted wheat matures one season after planting (req §11: plant in spring →
 // grow through summer → harvestable in fall). Planting is spring-locked and
 // harvest is fall-locked (see season.ts), so a one-season grow timer lands the
@@ -293,7 +293,7 @@ export const STABLES_COST: BuildCost = { wood: 3 };
 // Per-item craft times: Sword 20s, Shield 30s.
 export const CRAFT_TICKS: Record<"sword" | "shield", number> = {
   sword: ticks(20),
-  shield: ticks(30),
+  shield: ticks(20),
 };
 export const CRAFT_COST: Record<"sword" | "shield", BuildCost> = {
   sword: { iron: 3 },

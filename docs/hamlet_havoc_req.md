@@ -222,7 +222,7 @@ Enemies
 | Item    | Cost            | Effect          |  Build Time  |
 |---------|-----------------|-----------------| ------------ |
 | Sword   | 3 Iron          | +1D6 to Attack  |  20 sec      |
-| Shield  | 2 Iron + 2 Wood | +1D4 to Defense |  30 sec      |
+| Shield  | 2 Iron + 2 Wood | +1D4 to Defense |  20 sec      |
 
 - A worker stationed inside the smithy produces **one** item per craft order: when the player issues a Craft Sword / Craft Shield command the worker makes a single item, then leaves the smithy and stands idle. To make more, the player issues the command again.
 
@@ -281,8 +281,8 @@ Enemies
 | Action       | Unit(s)            | Season  | Duration   | Notes                                        |
 |--------------|--------------------|---------|------------|----------------------------------------------|
 | Plough Field | Worker             | Any     | 10 sec     | Result: ploughed tile ready to plant         |
-| Plant Field  | Worker             | Spring  | 10 sec     | Requires 1 wheat per tile as seed            |
-| Harvest      | Worker             | Fall    | 10 sec     | Yields a random 10–20 wheat per tile         |
+| Plant Field  | Worker             | Spring  | 5 sec     | Requires 1 wheat per tile as seed            |
+| Harvest      | Worker             | Fall    | 5 sec     | Yields a random 10–20 wheat per tile         |
 | Collect Wood | Worker             | Any     | 1 Wood / 5 sec |  |
 | Fishing      | Worker / Soldier   | Any     | base 1 Meat / 5 sec | Seasonal variance (faster in summer ≈ 1/3 sec, slower in winter ≈ 1/10 sec) |
 | Building     | Worker             | Any     | varies   | varies by building |

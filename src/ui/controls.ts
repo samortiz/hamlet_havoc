@@ -9,6 +9,7 @@
 
 import {
   CAMERA_PAN_PX_PER_SEC,
+  CRAFT_COST,
   DRAG_SELECT_THRESHOLD_PX,
   HEX_SIZE,
   MAP_WIDTH,
@@ -105,9 +106,11 @@ export function createControls(opts: {
   let hoveredUnitId: number | null = null;
   let hoveredBuildingId: number | null = null;
   let hoveredForestWood: number | null = null;
-  // Build buttons, kept so their affordability (disabled state + cost tooltip)
-  // can be refreshed every frame as resources change — not just on rebuild.
-  let buildButtons: Array<[BuildableKind, HTMLButtonElement]> = [];
+  // Action-panel buttons that cost resources (build, craft). Kept so their
+  // affordability — the disabled look plus the "Missing:" tooltip — can be
+  // refreshed every frame as resources change, not just on rebuild. `getCost`
+  // is re-read each refresh so variable costs (e.g. craft) stay live.
+  let costButtons: Array<{ btn: HTMLButtonElement; getCost: () => BuildCost }> = [];
 
   const held = new Set<string>();
   const mouse = { x: 0, y: 0, inside: false };
@@ -175,12 +178,14 @@ export function createControls(opts: {
     return s;
   }
 
-  // Refresh each build button's disabled look + cost tooltip from current
-  // resources. Cheap (6 buttons), so the frame loop calls it every tick.
-  function refreshBuildButtons(): void {
+  // Refresh each cost-bearing button's disabled look + cost tooltip from current
+  // resources, so a button the player can't afford greys out and its hover
+  // tooltip lists the shortfall. Cheap (a handful of buttons), so the frame loop
+  // calls it every tick.
+  function refreshCostButtons(): void {
     const res = getState().resources;
-    for (const [kind, btn] of buildButtons) {
-      const cost = buildableCost(kind);
+    for (const { btn, getCost } of costButtons) {
+      const cost = getCost();
       const affordable = canAfford(res, cost);
       btn.classList.toggle("disabled", !affordable);
       btn.setAttribute("aria-disabled", String(!affordable));
@@ -190,6 +195,8 @@ export function createControls(opts: {
 
   function rebuildActionPanel(): void {
     actionPanel.innerHTML = "";
+    // Re-registered below as the panel is rebuilt; refreshed every frame after.
+    costButtons = [];
 
     // Build section — always visible; buttons mirror the digit key shortcuts.
     const buildSection = apSection("Build");
@@ -201,7 +208,6 @@ export function createControls(opts: {
       ["mine", "5 Mine"],
       ["stables", "6 Stables"],
     ];
-    buildButtons = [];
     for (const [kind, label] of buildKinds) {
       const btn = apButton(label, () => {
         // Guard: ignore clicks on unaffordable builds (kept clickable only so
@@ -210,7 +216,7 @@ export function createControls(opts: {
         placementKind = kind;
         rebuildActionPanel();
       }, placementKind === kind);
-      buildButtons.push([kind, btn]);
+      costButtons.push({ btn, getCost: () => buildableCost(kind) });
       buildSection.append(btn);
     }
     actionPanel.append(buildSection);
@@ -242,10 +248,12 @@ export function createControls(opts: {
           const btn = apButton(label, () => {
             enqueue({ type: "equip", unitIds: [...selection], item, equip: !have });
           });
-          // Disable "Equip" when the pool is empty and the lead isn't holding one.
+          // Disable "Equip" when the pool is empty and the lead isn't holding
+          // one, and say so on hover so the missing item is clear.
           if (!have && equip[item] <= 0) {
             btn.classList.add("disabled");
             btn.setAttribute("aria-disabled", "true");
+            btn.title = `No ${item} in the armory — craft one at the smithy first`;
           }
           return btn;
         };
@@ -320,14 +328,17 @@ export function createControls(opts: {
         }
 
         if (b.kind === "smithy" && isBuilt(b) && selection.length > 0) {
-          bSection.append(
-            apButton("Craft Sword", () => {
-              enqueue({ type: "craft", buildingId: b.id, item: "sword", unitIds: [...selection] });
-            }),
-            apButton("Craft Shield", () => {
-              enqueue({ type: "craft", buildingId: b.id, item: "shield", unitIds: [...selection] });
-            }),
-          );
+          const craftButton = (item: "sword" | "shield", label: string): HTMLButtonElement => {
+            const btn = apButton(label, () => {
+              // Guard like the build buttons: ignore clicks when the iron/wood
+              // isn't there (kept clickable so the cost tooltip still shows).
+              if (!canAfford(getState().resources, CRAFT_COST[item])) return;
+              enqueue({ type: "craft", buildingId: b.id, item, unitIds: [...selection] });
+            });
+            costButtons.push({ btn, getCost: () => CRAFT_COST[item] });
+            return btn;
+          };
+          bSection.append(craftButton("sword", "Craft Sword"), craftButton("shield", "Craft Shield"));
         }
 
         if (b.kind === "barracks" && isBuilt(b) && selection.length > 0) {
@@ -352,7 +363,7 @@ export function createControls(opts: {
       }
     }
 
-    refreshBuildButtons();
+    refreshCostButtons();
   }
 
   // Seed the panel on startup.
@@ -690,9 +701,9 @@ export function createControls(opts: {
   window.addEventListener("keyup", (e) => held.delete(e.code));
 
   function update(dtSec: number): void {
-    // Keep build-button affordability + cost tooltips in sync with the live
-    // resource pool (the panel itself only rebuilds on selection change).
-    refreshBuildButtons();
+    // Keep cost-button affordability + tooltips in sync with the live resource
+    // pool (the panel itself only rebuilds on selection change).
+    refreshCostButtons();
 
     // Rebuild the panel when a selected Main Hall starts/finishes raising a
     // worker, so the Create Worker button reflects the live state.
