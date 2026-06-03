@@ -1,8 +1,4 @@
 TODO
+ubuntu I ran amdgpu-uninstall and now my graphics card isn't used
 
-T2. When an end-of-year attack happens.  A message is shown, and we need to pause time until the user clicks to dismiss the message, then time will resume as normal.  This is a little different from an attack when mining or fishing and time is not stopped at all.  I do not want time paused for the whole attack, only pause when the end-of-year dialog is shown.   It should tell the name of the attack and how many enemies are attacking.  A little description of what the attack was based on will help the user to know why they have that count of enemies. 
-
-T3.  When I click in one of the town tiles beside the town center, the unit immediately turns around an heads home.  It should open the town trade dialog instead.  I think this happened when town squares are considered forest and the unit is at carrying capacity. All town squares should be grass so this doesn't happen, any click on any of the town tiles should open the town trading dialog. 
-
-
-
+Google/Chrome/User Data

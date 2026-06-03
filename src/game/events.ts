@@ -200,14 +200,20 @@ export type UpcomingEvent =
   | { category: "tax" }
   | { category: "misc"; misc: MiscEventKind };
 
-// The event currently resolving during the EndOfYearEvent (modal) phase (§21.1):
-// only Tax and Misc are modal and carry an ActiveEvent. An Attack is fought live
-// in the `playing` phase and never sets one (§16.1).
+// The event currently resolving during the EndOfYearEvent (modal) phase (§21.1).
+// Every year-end event opens a modal: Tax gathers payment, Misc acknowledges an
+// effect, and an Attack pauses just long enough to *announce* the incoming wave
+// (§16.1) — naming the raiders, their head count, and what hamlet stat drew them
+// — before the player dismisses it and fights the wave live in `playing`.
 export type ActiveEvent =
   | { category: "tax"; flavour: TaxFlavour; demand: number }
   // `trade` is set only for the four trade-dialog Misc events (§16.3, item 32);
   // it tracks per-offer purchase counts while the dialog is open.
-  | { category: "misc"; misc: MiscEventKind; summary: string; trade?: MiscTradeState };
+  | { category: "misc"; misc: MiscEventKind; summary: string; trade?: MiscTradeState }
+  // The wave has already spawned (it sits frozen while this modal is open); the
+  // fields drive the announcement dialog. `count` is the total enemy head count
+  // and `description` explains which hamlet stat the wave was scaled from (§16.1).
+  | { category: "attack"; flavour: AttackFlavour; hasDragon: boolean; count: number; description: string };
 
 // Human-readable label for the HUD announcement + event modal (§16.4, §19.1).
 export const MISC_LABEL: Record<MiscEventKind, string> = {

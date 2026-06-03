@@ -14,6 +14,7 @@ import {
   ORE_TICKS_PER_UNIT,
   PLANT_TICKS,
   PLOUGH_TICKS,
+  UNIT_WALK_TICKS_PER_FRAME,
   WOOD_TICKS_PER_UNIT,
   WORKER_SPAWN_TICKS,
 } from "../config/index.js";
@@ -33,7 +34,65 @@ import { carriedTotal, RESOURCE_TYPES, type ResourceType } from "../game/resourc
 import type { GameState } from "../game/state.js";
 import { hasHorse, maxHp, type FieldAction, type GatherResource, type Order } from "../game/units.js";
 import type { View } from "../ui/camera.js";
-import { buildingSprite, terrainSprite, townSprite, unitSprite, type TownSpriteKey } from "./sprites.js";
+import {
+  buildingSprite,
+  enemySprite,
+  terrainSprite,
+  townSprite,
+  unitWalkSheet,
+  unitSprite,
+  type TownSpriteKey,
+  type WalkFacing,
+} from "./sprites.js";
+
+// True while the unit is traversing a path (any order phase that walks the unit
+// between tiles). The walk-cycle animation plays only when this is true; a unit
+// standing still (idle, or holding at a work/build/trade site) shows its plain
+// static sprite instead of striding in place.
+function orderIsWalking(order: Order): boolean {
+  switch (order.type) {
+    case "move":
+    case "mount":
+    case "attack":
+      return true;
+    case "gather":
+      return order.phase === "toWork" || order.phase === "toStore";
+    case "field":
+      return order.phase === "toTile";
+    case "build":
+      return order.phase === "toSite";
+    case "operate":
+      return order.phase === "toBuilding" || order.phase === "toStore";
+    case "trade":
+      return order.phase === "toTown";
+    case "idle":
+      return false;
+  }
+}
+
+// The tile a walking unit is currently heading toward (its path cursor), or null
+// when it isn't walking / has nothing left on the path. Every walking order
+// carries the same path + node cursor, so we read it structurally.
+function walkTargetTile(order: Order): { x: number; y: number } | null {
+  if (!orderIsWalking(order)) return null;
+  const o = order as { path?: { x: number; y: number }[]; node?: number };
+  if (!o.path || o.node === undefined || o.node >= o.path.length) return null;
+  return o.path[o.node];
+}
+
+// Which walk strip to play, chosen from the heading's sign in screen space:
+// upward travel uses the back-view "N*" strips, level/downward the front-view
+// "S*" strips (so pure-horizontal E/W movement faces front); rightward picks
+// "*E", leftward "*W". `currentPx`/`currentPy` are the unit's already-computed
+// screen position. Covers all six hex directions with the four facings.
+function walkFacing(order: Order, currentPx: number, currentPy: number): WalkFacing {
+  const target = walkTargetTile(order);
+  if (!target) return "SW";
+  const there = hexToPixel(target.x, target.y);
+  const vert = there.py < currentPy ? "N" : "S";
+  const horiz = there.px > currentPx ? "E" : "W";
+  return `${vert}${horiz}` as WalkFacing;
+}
 
 // The six town-ring decorations (req §18), one per hex neighbour of the market,
 // assigned by neighbour index so a given town always looks the same.
@@ -597,22 +656,47 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
       c.stroke();
     }
 
-    // Enemies (req §6.1, §17): red discs with an HP pip.
+    // Enemies (req §6.1, §17). A creature sprite is drawn aspect-preserved with
+    // its feet near the tile centre (monsters read a touch larger than units);
+    // kinds without a sprite (and sprites still decoding) fall back to the red
+    // disc. Either way the current HP is labelled just above the creature.
+    const ENEMY_SPRITE_H = HEX_SIZE * 1.35; // ~54px tall — monsters loom over units
+    const ENEMY_FOOT_OFFSET = HEX_SIZE * 0.28;
     for (const e of Object.values(state.enemies)) {
       const { px, py } = hexToPixel(e.x, e.y);
-      const r = HEX_SIZE * 0.42;
-      c.beginPath();
-      c.arc(px, py, r, 0, Math.PI * 2);
-      c.fillStyle = "#9a2f24";
-      c.fill();
-      c.lineWidth = 2;
-      c.strokeStyle = "#2a0d0a";
-      c.stroke();
-      c.fillStyle = COLORS.parchment;
+      const sprite = enemySprite(e.kind);
+      let labelY: number;
+      if (sprite) {
+        const h = ENEMY_SPRITE_H;
+        const w = (sprite.naturalWidth / sprite.naturalHeight) * h;
+        const top = py + ENEMY_FOOT_OFFSET - h;
+        c.drawImage(sprite, px - w / 2, top, w, h);
+        labelY = top - 2;
+        c.textAlign = "center";
+        c.textBaseline = "bottom";
+      } else {
+        const r = HEX_SIZE * 0.42;
+        c.beginPath();
+        c.arc(px, py, r, 0, Math.PI * 2);
+        c.fillStyle = "#9a2f24";
+        c.fill();
+        c.lineWidth = 2;
+        c.strokeStyle = "#2a0d0a";
+        c.stroke();
+        labelY = py;
+        c.textAlign = "center";
+        c.textBaseline = "middle";
+      }
+      // HP readout. Outlined so it stays legible over both the sprite and the disc.
+      const hpText = String(Math.round(e.hp));
       c.font = `bold ${Math.round(HEX_SIZE * 0.4)}px system-ui, sans-serif`;
-      c.textAlign = "center";
-      c.textBaseline = "middle";
-      c.fillText(String(Math.round(e.hp)), px, py);
+      if (sprite) {
+        c.lineWidth = 3;
+        c.strokeStyle = "#2a0d0a";
+        c.strokeText(hpText, px, labelY);
+      }
+      c.fillStyle = COLORS.parchment;
+      c.fillText(hpText, px, labelY);
     }
 
     // Placement ghost preview (req §7.1, while in placement mode).
@@ -637,6 +721,13 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
       if (u.insideBuildingId !== null) continue; // hidden while operating
       const { px, py } = hexToPixel(u.x, u.y);
       const sprite = unitSprite(u.kind);
+      // While travelling, play the kind's walk strip; a unit standing still uses
+      // the static sprite. Each cell is framed to match the static sprite, so the
+      // swap on start/stop doesn't pop. Indexed off tickCount → deterministic and
+      // frozen while paused.
+      const walkSheet = orderIsWalking(u.order)
+        ? unitWalkSheet(u.kind, walkFacing(u.order, px, py))
+        : null;
 
       // Horse (req §9): a brown mount ellipse under the unit's feet.
       if (hasHorse(u)) {
@@ -648,7 +739,17 @@ export function createRenderer(canvas: HTMLCanvasElement): Renderer {
 
       // headY = top of whatever glyph we draw, for placing the carry cue.
       let headY: number;
-      if (sprite) {
+      if (walkSheet) {
+        const fw = walkSheet.img.naturalWidth / walkSheet.frames;
+        const fh = walkSheet.img.naturalHeight;
+        const h = SPRITE_TARGET_H;
+        const w = (fw / fh) * h;
+        const top = py + FOOT_OFFSET - h;
+        const frame =
+          Math.floor(state.tickCount / UNIT_WALK_TICKS_PER_FRAME) % walkSheet.frames;
+        c.drawImage(walkSheet.img, frame * fw, 0, fw, fh, px - w / 2, top, w, h);
+        headY = top;
+      } else if (sprite) {
         const h = SPRITE_TARGET_H;
         const w = (sprite.naturalWidth / sprite.naturalHeight) * h;
         const top = py + FOOT_OFFSET - h;

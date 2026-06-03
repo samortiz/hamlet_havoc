@@ -31,6 +31,20 @@ npm run test:e2e   # Playwright browser play-tests (boots Vite, drives Chrome)
 npm run test:all   # Vitest + Playwright back-to-back
 ```
 
+### Image Tooling
+
+Two image-processing tools are installed for sprite work (cropping atlases from
+`docs/raw_sprites/`, building animation strips, inspecting PNG content/bounding
+boxes before they land in `public/assets/sprites/`):
+
+- **ImageMagick 6.9** — invoked as `convert` (and `mogrify` / `identify`) at
+  `/usr/bin/convert`. Note this is ImageMagick **6**, so there is **no unified
+  `magick` command** (that's v7); always use `convert`, not `magick`.
+- **Pillow (PIL) 10.2** — `import PIL` under `/usr/bin/python3`
+  (`/usr/lib/python3/dist-packages/PIL`). Preferred for precise per-frame work:
+  bounding boxes (`Image.getbbox()`), grid slicing, and Lanczos rescaling. The
+  worker walk strip was built this way (see `src/render/sprites.ts`).
+
 ## Architecture
 
 Client-side game in TypeScript under `src/`, bundled by Vite into static files.

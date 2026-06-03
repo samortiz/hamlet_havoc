@@ -90,7 +90,12 @@ import { makeWorker, type Unit } from "./units.js";
 // v21: dismountable horses (req §9) — GameState gains the `horses` map of
 // riderless horse entities (a dismounted mount walks to the nearest Stables to
 // wait). A v20 save lacks the field, so it is rejected on load.
-export const SAVE_VERSION = 21;
+// v22: attacks are modal again (req §16.1) — an Attack now spawns its wave and
+// enters `endOfYearEvent` with an `attack` ActiveEvent that announces the wave
+// (flavour, head count, what drew it), pausing only until the player dismisses
+// it; then the wave is fought live. A v21 save mid-attack stayed in `playing`
+// with no such ActiveEvent, so its shape no longer matches and it is rejected.
+export const SAVE_VERSION = 22;
 
 // Most recent notifications kept on the state. The UI dedups by id and only
 // toasts ones it hasn't shown yet, so this just bounds save size — older entries

@@ -19,6 +19,7 @@ import {
 } from "../game/buildings.js";
 import type { Command } from "../game/commands.js";
 import {
+  attackFlavourLabel,
   MISC_LABEL,
   MISC_TRADE_OFFERS,
   type MiscTradeOffer,
@@ -195,6 +196,22 @@ export function createEventOverlay(opts: {
     dialog.append(footer);
   }
 
+  // Attack announcement (§16.1): names the raiders, their head count, and what
+  // hamlet stat drew them, then "Begin" un-pauses to fight the live wave.
+  function renderAttack(state: GameState): void {
+    const ev = state.activeEvent;
+    if (ev?.category !== "attack") return;
+    dialog.append(header(`⚔️ ${attackFlavourLabel(ev.flavour, ev.hasDragon)}`));
+    dialog.append(
+      paragraph(`${ev.count} ${ev.count === 1 ? "enemy marches" : "enemies march"} on the hamlet!`),
+    );
+    dialog.append(paragraph(ev.description, "event-hint"));
+    const footer = document.createElement("div");
+    footer.className = "event-footer";
+    footer.append(btn("Begin", () => enqueue({ type: "acknowledgeEvent" })));
+    dialog.append(footer);
+  }
+
   function renderTax(state: GameState): void {
     const ev = state.activeEvent;
     if (ev?.category !== "tax") return;
@@ -333,13 +350,16 @@ export function createEventOverlay(opts: {
       lastSig = "";
     }
 
-    // Tax/Misc/game-over are true modals that capture clicks. (Attacks no longer
-    // open this overlay — they are fought live with only a HUD warning, §16.1.)
+    // Attack/Tax/Misc/game-over are true modals that capture clicks. An attack's
+    // modal is a one-off announcement (§16.1): the wave is frozen behind it and
+    // fought live once dismissed.
     const sig = signature(state);
     if (sig !== lastSig) {
       dialog.replaceChildren();
       if (state.phase === "gameOver") {
         renderGameOver(state);
+      } else if (state.activeEvent?.category === "attack") {
+        renderAttack(state);
       } else if (state.activeEvent?.category === "tax") {
         renderTax(state);
       } else if (state.activeEvent?.category === "misc") {

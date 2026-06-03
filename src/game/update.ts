@@ -85,12 +85,12 @@ export function update(
     mineType: { ...state.map.mineType },
     mountainType: { ...state.map.mountainType },
   };
-  // A Tax/Misc event opens a modal dialog that fully pauses the world (req §16,
+  // A year-end event opens a modal dialog that fully pauses the world (req §16,
   // §21.1): while phase is `endOfYearEvent` the tick count holds at the boundary
   // *and* the advancement passes below are skipped, so no unit moves, fights, or
-  // produces until the player closes the dialog. An Attack event never uses this
-  // phase — it spawns its wave and stays in `playing`, so the calendar and all
-  // production carry on and the wave is fought live (req §16.1).
+  // produces until the player closes the dialog. An Attack uses this phase only to
+  // *announce* its wave: the wave has already spawned and sits frozen until the
+  // player dismisses the modal, after which it is fought live in `playing` (§16.1).
   const inEvent = state.phase === "endOfYearEvent";
   const tickAdvance = inEvent ? 0 : dtTicks;
 
@@ -128,10 +128,11 @@ export function update(
   // reach the sim and return control to `playing`.
   for (const cmd of commands) handleCommand(cmd, ctx, units);
 
-  // Steps 2–6 are the live world. They are skipped wholesale while a Tax/Misc
+  // Steps 2–6 are the live world. They are skipped wholesale while a year-end
   // modal is open (`inEvent`), which is what makes the dialog a true pause: no
   // unit moves, fights, heals, produces, or crosses a season boundary until the
-  // player closes it. An attack stays in `playing`, so these all run for it.
+  // player closes it — including the announcement modal that freezes a freshly
+  // spawned attack wave until the player dismisses it (§16.1).
   if (!inEvent) {
     // 2) Advance every unit's order by dtTicks. We snapshot keys first because
     // building/training can promote a unit (mutating `units` mid-loop is fine

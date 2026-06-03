@@ -279,9 +279,23 @@ export function generateMap(rngState: number): {
   }
 
   const map: GameMap = { width: MAP_WIDTH, height: MAP_HEIGHT, tiles, forestWood, mineType: {}, mountainType };
+
+  // The whole town flower is grass (req §18): a unit clicked onto any town tile
+  // must reach it and open the marketplace, so no tile may be forest/water/
+  // mountain (which would re-route to a gather order) or hold gathering state.
+  const town = placeTown(map);
+  for (const t of townTiles(town)) {
+    if (!inBounds(map, t.x, t.y)) continue;
+    const idx = t.y * map.width + t.x;
+    map.tiles[idx] = "grass";
+    delete map.forestWood[idx];
+    delete map.mineType[idx];
+    delete map.mountainType[idx];
+  }
+
   return {
     map,
     rngState: rng,
-    town: placeTown(map),
+    town,
   };
 }

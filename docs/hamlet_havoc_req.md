@@ -216,7 +216,7 @@ Enemies
 - **Demolish:** The player can demolish any building to reclaim the space; demolished buildings do not refund their cost.
 - **No maximum** number of any building type.
 - Any worker can operate any building (smithy, barracks, mine) by stepping inside — buildings do not require a permanently assigned worker.
-- **Load/unload at storage buildings:** with a non-captain unit on or beside a *built storage building* (Main Hall, Barn, House), the player can open a load/unload panel to move resources freely between the unit's inventory and the hamlet's shared pool — load up a worker for a town run, or unload a returning one. Transfers respect the pool's storage cap (loading the unit) and the unit's carry room (loading the pool). This is the hamlet-side analogue of the town interface (§18).
+- **Load/unload at storage buildings:** with a unit on or beside a *built storage building* (Main Hall, Barn, House), the player can open a load/unload panel to move resources freely between the unit's inventory and the hamlet's shared pool — load up a worker for a town run, or unload a returning one. A captain can use the panel too, but only for the gold and diamonds it is allowed to carry (§6.1); loading other resources onto a captain is refused. Transfers respect the pool's storage cap (loading the unit) and the unit's carry room (loading the pool). This is the hamlet-side analogue of the town interface (§18).
 
 ### 7.2 Smithy Items
 | Item    | Cost            | Effect          |  Build Time  |
@@ -380,9 +380,9 @@ Spring → Summer → Fall → Winter → (Year++; end-of-year event) → Spring
 
 ## 16. End-of-Year Events
 
-At the end of winter (year transition), a special event triggers. The upcoming event type is **announced at the start of that year** (displayed in the HUD), so the player has the full year to prepare. How it resolves depends on the type:
-- **Attack** events do **not** pause the game. The wave spawns at a random map edge, a HUD warning is shown, and the calendar rolls straight into spring — time, worker labour, and resource production all continue as normal while the wave marches in and is fought live (§16.1).
-- **Tax** and **Misc** events are a **modal interruption**: a dialog opens and the **whole simulation freezes** while it is open — no time passes and nothing moves, fights, or produces. Once the player resolves it (pays the tax / acknowledges the message / closes the trade dialog), the world un-freezes and play continues for the new year.
+At the end of winter (year transition), a special event triggers. The upcoming event type is **announced at the start of that year** (displayed in the HUD), so the player has the full year to prepare. Every event opens a **modal interruption** — a dialog opens and the **whole simulation freezes** while it is open (no time passes and nothing moves, fights, or produces). How it resolves depends on the type:
+- **Attack** events spawn their wave at a random map edge and then open a brief **announcement dialog** that names the raiders, their head count, and which hamlet stat drew them, so the player understands the threat. The freeze lasts only while this dialog is open: once the player dismisses it, the world un-freezes and the already-spawned wave is fought **live** during normal play — time, worker labour, and resource production all continue while the wave marches in (§16.1). The simulation is **not** paused for the duration of the battle, only for the one-time announcement.
+- **Tax** and **Misc** events resolve entirely *within* the modal: once the player pays the tax / acknowledges the message / closes the trade dialog, the world un-freezes and play continues for the new year.
 
 ### 16.0 Event Selection & Cadence
 - Exactly **one event fires per year**, at the winter→spring boundary (so the first event is at the end of Year 1).
@@ -399,7 +399,7 @@ At the end of winter (year transition), a special event triggers. The upcoming e
   - *Plunder* — keys off **total stored resource value**: number of goblins = total value of resources / 20.  1 goblin chief per 10 gold stored. 
   - *{Goblin/Dragon} Attack* - keys off **gold or diamonds**  named "Dragon Attack" if hamlet has 2+ diamonds, this will produce 1 dragon.   If hamlet does not have 2+ diamonds, but has 10+ gold then "Goblin Attack" which will be a goblin chief + 1 goblin per 5 gold stored. 
 - **Attack minimum.** No wave is ever empty: unless a dragon is leading it, every wave includes at least a year-scaled goblin floor of **1 goblin per 3 years** (i.e. `max(1, floor(year / 3))` goblins). This keeps a Goblin/Dragon attack on a hamlet holding neither gold nor diamonds — and any other flavour with a small keyed stat — from spawning nothing. (tunable)
-- The attack **does not freeze time or open a modal**: the wave spawns, a HUD warning banner names the raiders and points at their landing site, and the year rolls straight into spring. Time and resource production continue as normal — the wave is fought live during ordinary play, exactly like an ambient mine/fishing threat. The player wins when all enemies are defeated or repelled. Surviving enemies that reach the hamlet damage buildings and units per normal combat. **Loss check** runs continuously during the wave: if the Main Hall is destroyed or all units die, the game is over.
+- When the attack fires the wave spawns and a **modal announcement** opens, pausing the simulation while it is shown. The dialog names the raiders (e.g. "A warband"), states **how many enemies** are attacking, and gives a short **description of what the wave was scaled from** (the keyed hamlet stat — workers, buildings, stored value, or gold/diamonds) so the player understands why they face that count. A HUD warning banner is also posted, pointing at the landing site. Dismissing the dialog ("Begin") un-freezes the world; the wave is then fought live during ordinary play, exactly like an ambient mine/fishing threat — time and resource production continue and the simulation is **not** paused for the battle itself. The player wins when all enemies are defeated or repelled. Surviving enemies that reach the hamlet damage buildings and units per normal combat. **Loss check** runs continuously during the wave: if the Main Hall is destroyed or all units die, the game is over.
 
 ### 16.2 Tax
 - A tax collector demands an amount of **gold** that varies based on tax flavour based on hamlet size and year. 
@@ -556,9 +556,9 @@ requested then the trade can proceed, otherwise the town shopkeeper will reject 
 The game runs as a top-level state machine; the simulation only advances normal play in the `Playing` phase.
 - `Intro` → (New Game / Load) → `Playing`
 - `Playing` ⇄ `Paused` (Space)
-- At the winter→spring boundary the announced year-end event fires (§16):
-  - An **Attack** stays in `Playing` — it spawns its wave and the year advances immediately, so the simulation never pauses and the wave is fought live during normal play.
-  - A **Tax** or **Misc** event enters `Playing` → `EndOfYearEvent`, a **modal interruption** that **fully pauses the simulation** (no time, motion, combat, or production) while its dialog is open. Resolving the dialog returns control to `Playing` for the new year.
+- At the winter→spring boundary the announced year-end event fires (§16) by entering `Playing` → `EndOfYearEvent`, a **modal interruption** that **fully pauses the simulation** (no time, motion, combat, or production) while its dialog is open. Resolving the dialog returns control to `Playing` for the new year. The dialog's purpose differs by type:
+  - An **Attack** spawns its wave and then shows a one-time **announcement** dialog (raiders' name, head count, and what drew them); the wave sits frozen until the player dismisses it, after which it is fought **live** in `Playing` (the simulation is not paused for the battle itself, only the announcement).
+  - A **Tax** or **Misc** event resolves entirely within the dialog (pay the tax / acknowledge the message / close the trade dialog).
 - `Playing` / `EndOfYearEvent` → `GameOver` when a loss condition is met (Main Hall destroyed or all workers dead).
 - `GameOver` → (Restart) → `Intro`
 

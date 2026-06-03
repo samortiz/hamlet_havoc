@@ -26,6 +26,12 @@ export const MAP_HEIGHT = 40;
 // circumradius 70) downscale crisply onto a ~70×80 footprint.
 export const HEX_SIZE = 40;
 
+// Sprite-animation playback (display only). Walk frames advance one per this
+// many sim ticks; at 30 ticks/sec, 2 ticks = 15 fps so the worker's 30-frame
+// walk cycle loops in ~2 s. Driven off GameState.tickCount so it stays
+// deterministic and pause-aware.
+export const UNIT_WALK_TICKS_PER_FRAME = 2;
+
 // --- Time & seasons (req §15) ---
 export const SEASONS = ["Spring", "Summer", "Fall", "Winter"] as const;
 export type Season = (typeof SEASONS)[number];

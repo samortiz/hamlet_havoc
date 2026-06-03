@@ -87,32 +87,46 @@ describe("event selection & announcement (req §16.0, §16.4)", () => {
 });
 
 describe("attack event (req §16.1)", () => {
-  it("spawns a wave at the boundary without pausing, and rolls into spring", () => {
+  it("spawns a wave and opens an announcement modal that pauses time", () => {
     let s = onYearBoundary(42, { category: "attack" });
     s = update(s, [], 1); // cross winter→spring
-    // An attack is fought live — it never opens the modal phase or an activeEvent.
-    expect(s.phase).toBe("playing");
-    expect(s.activeEvent).toBeNull();
+    // The wave spawns immediately and the announcement modal pauses the world.
+    expect(s.phase).toBe("endOfYearEvent");
+    expect(s.activeEvent?.category).toBe("attack");
     expect(Object.keys(s.enemies).length).toBeGreaterThan(0);
-    // The year resolves immediately: survival counted and next year announced.
-    expect(s.stats.yearsSurvived).toBe(1);
-    expect(s.upcomingEvent).toBeDefined();
+    if (s.activeEvent?.category === "attack") {
+      // The modal reports the head count + how the wave was scaled (§16.1).
+      expect(s.activeEvent.count).toBe(Object.keys(s.enemies).length);
+      expect(s.activeEvent.description.length).toBeGreaterThan(0);
+    }
     // A clickable warning banner was posted for the wave.
     expect(s.notifications.some((n) => n.kind === "enemy")).toBe(true);
+    // The year is not yet counted as survived — that happens on dismissal.
+    expect(s.stats.yearsSurvived).toBe(0);
   });
 
-  it("does not suspend season time during the attack — the calendar keeps moving", () => {
-    let s = onYearBoundary(7, { category: "attack" });
-    s = update(s, [], 1);
-    const afterTrigger = s.tickCount;
-    s = update(s, [], 5); // enemies still alive, but time now keeps advancing
+  it("freezes the wave until dismissed, then fights it live (§16.1)", () => {
+    let s = onYearBoundary(42, { category: "attack" });
+    s = update(s, [], 1); // open the announcement modal
+    const frozenTick = s.tickCount;
+    s = update(s, [], 5); // nothing advances while the modal is open
+    expect(s.phase).toBe("endOfYearEvent");
+    expect(s.tickCount).toBe(frozenTick);
+    // Dismiss the announcement: control returns to play and the year is counted.
+    s = update(s, [{ type: "acknowledgeEvent" }], 1);
     expect(s.phase).toBe("playing");
-    expect(s.tickCount).toBe(afterTrigger + 5);
+    expect(s.stats.yearsSurvived).toBe(1);
+    expect(s.upcomingEvent).toBeDefined();
+    // The wave (still on the map) is now fought live — time advances again.
+    const afterDismiss = s.tickCount;
+    s = update(s, [], 5);
+    expect(s.phase).toBe("playing");
+    expect(s.tickCount).toBe(afterDismiss + 5);
   });
 
   it("rolls one of the four flavours and never spawns an empty wave (§16.1)", () => {
-    // The flavour is no longer stored in state, but the warning banner names it,
-    // so distinct banners stand in for distinct flavours.
+    // The flavour is announced both in the banner and the attack ActiveEvent;
+    // distinct banners stand in for distinct flavours.
     const banners = new Set<string>();
     for (let seed = 1; seed <= 40; seed++) {
       let s = onYearBoundary(seed, { category: "attack" });

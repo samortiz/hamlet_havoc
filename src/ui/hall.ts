@@ -20,7 +20,7 @@ import {
   type ResourceType,
 } from "../game/resources.js";
 import type { GameState } from "../game/state.js";
-import { carryCap, type Unit } from "../game/units.js";
+import { canCarryResource, carryCap, type Unit } from "../game/units.js";
 import type { View } from "./camera.js";
 
 export interface HallPanel {
@@ -65,12 +65,13 @@ export function createHallPanel(opts: {
     return null;
   }
 
-  // The unit whose load/unload we show: a non-captain on or beside the building,
-  // preferring one in the current selection, else the lowest id.
+  // The unit whose load/unload we show: any unit on or beside the building,
+  // preferring one in the current selection, else the lowest id. Captains can
+  // load/unload too, but only their gold/diamond (enforced per-row below and by
+  // the sim's canCarryResource gate — req §6.1, §7.6).
   function activeUnit(state: GameState, building: Building, view: View): Unit | null {
     const near: Unit[] = [];
     for (const u of Object.values(state.units)) {
-      if (u.kind === "captain") continue; // hall load/unload is non-captain only (req §6.4)
       if (u.insideBuildingId !== null) continue;
       if (isUnitAtBuilding(u, building)) near.push(u);
     }
@@ -161,11 +162,16 @@ export function createHallPanel(opts: {
       const val = document.createElement("span");
       val.className = "town-val";
       val.textContent = `v${RESOURCE_VALUE[t]}`;
+      const canCarry = canCarryResource(unit, t);
       r.append(
         val,
         btn("Load", (e) => load1(t, e.shiftKey ? room : 1), {
-          disabled: room <= 0,
-          title: room <= 0 ? "Carry full" : "Load onto the unit (shift: all that fits)",
+          disabled: room <= 0 || !canCarry,
+          title: !canCarry
+            ? `A ${unit.kind} can't carry ${RESOURCE_LABEL[t].toLowerCase()}`
+            : room <= 0
+              ? "Carry full"
+              : "Load onto the unit (shift: all that fits)",
         }),
       );
       storeCol.body.append(r);

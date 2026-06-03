@@ -34,7 +34,14 @@
       "Bash(curl -fsS http://localhost:5173/assets/sprites/building_mainHall.png -o /dev/null -w \"castle png: %{http_code} \\(%{size_download} bytes\\)\\\\n\")",
       "Bash(node -e \"require.resolve\\('@playwright/test'\\)\")",
       "Bash(grep -rn \"= [0-9]\\\\+\\\\|= '[^']*'\\\\|= \\\\`\" /home/sortiz/projects/hamlet_havoc/src/game/ --include=\"*.ts\")",
-      "Bash(python3 *)"
+      "Bash(python3 *)",
+      "Bash(claude mcp *)",
+      "Bash(claude plugin *)",
+      "Read(//home/sortiz/.claude/plugins/**)",
+      "Read(//home/sortiz/.claude/**)",
+      "Bash(PIXEL_MCP_CONFIG=__TRACKED_VAR__/.config/pixel-mcp/config.json ~/.claude/plugins/marketplaces/pixel-plugin/bin/pixel-mcp --health)",
+      "Bash(echo \"exit=$?\")",
+      "Bash(file public/assets/sprites/enemy_*.png public/assets/sprites/unit_captain.png)"
     ]
   }
 }

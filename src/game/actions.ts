@@ -1306,15 +1306,16 @@ function regrowForest(ctx: SimCtx): void {
 // --- End-of-year events (req §16, §21.1) ---
 // One event fires per year at the winter→spring boundary. update() detects the
 // boundary (in the `playing` phase) and calls triggerEvent, which rolls the
-// magnitude of the announced event. The two event shapes differ sharply:
-//   • Attack — fought *live* (§16.1): the wave spawns, a warning is posted, and
-//     the year resolves immediately, so the phase stays `playing` and time and
-//     production carry on into spring while the wave marches in.
-//   • Tax / Misc — a *modal* (§16.2, §16.3): triggerEvent flips the phase to
-//     `endOfYearEvent`, which update() treats as a full pause (no time, motion,
-//     combat, or production) until the player closes the dialog and resolveEvent
-//     returns control to `playing`.
-// The loss check runs continuously, including mid-attack.
+// magnitude of the announced event. Every event opens a modal that pauses the
+// world (§21.1), but they differ in what the pause is *for*:
+//   • Attack (§16.1) — the wave spawns immediately, then the modal pauses just to
+//     *announce* it (the raiders' name, head count, and which hamlet stat drew
+//     them). Dismissing it returns to `playing`, where time and production carry
+//     on and the already-spawned wave marches in to be fought live.
+//   • Tax / Misc (§16.2, §16.3) — the modal *is* the event: it gathers the
+//     player's payment / acknowledgement before resolveEvent returns control.
+// While `endOfYearEvent` is the phase, update() applies a full pause (no time,
+// motion, combat, or production). The loss check still runs continuously.
 
 // The year that just ended at the current (boundary) tick — the scaling input
 // for event magnitudes (§16.0). At the winter→spring boundary tickCount is a
@@ -1330,18 +1331,16 @@ export function triggerEvent(ctx: SimCtx, units: Record<number, Unit>): void {
   // The prior year's Festival/Mild-Winter effects expire as the new year opens.
   ctx.eventMods = { ...ctx.eventMods, festival: false, mildWinter: false };
   const up = ctx.upcomingEvent;
+  ctx.phase = "endOfYearEvent";
   if (up.category === "attack") {
-    // An attack does not freeze time (req §16.1): spawn the wave (with a warning
-    // banner), then resolve the year straight away so the phase never leaves
-    // `playing`. The calendar rolls into spring and production continues while
-    // the wave marches in to be fought live.
-    spawnAttackWave(ctx, units);
-    resolveEvent(ctx);
+    // Spawn the wave now (it sits frozen while the modal is open), then open the
+    // announcement dialog (req §16.1). The wave is fought live once the player
+    // dismisses it via acknowledgeEvent → resolveEvent returns to `playing`.
+    ctx.activeEvent = spawnAttackWave(ctx, units);
     return;
   }
-  // Tax and Misc are modal (req §16.2, §16.3): enter the endOfYearEvent phase so
-  // update() pauses the world until the player settles/acknowledges the dialog.
-  ctx.phase = "endOfYearEvent";
+  // Tax and Misc are modal (req §16.2, §16.3): the endOfYearEvent phase pauses the
+  // world until the player settles/acknowledges the dialog.
   if (up.category === "tax") {
     ctx.activeEvent = startTax(ctx, units);
   } else {
@@ -1474,9 +1473,10 @@ function attackComposition(
 
 // Spawn the year-end attack wave at a random map edge (§16.1). Each enemy marches
 // on the hamlet via the existing land-enemy AI (no focus — picks the nearest
-// unit/building) and is fought live during normal play. Posts a clickable
-// warning banner naming the wave's flavour and pointing at its landing site.
-function spawnAttackWave(ctx: SimCtx, units: Record<number, Unit>): void {
+// unit/building) and is fought live during normal play. Posts a clickable warning
+// banner pointing at the landing site, and returns the `attack` ActiveEvent that
+// drives the announcement modal (flavour, head count, and what drew the wave).
+function spawnAttackWave(ctx: SimCtx, units: Record<number, Unit>): ActiveEvent {
   const year = eventYear(ctx);
   let fv: number;
   [ctx.rngState, fv] = rngInt(ctx.rngState, 0, 3);
@@ -1497,8 +1497,64 @@ function spawnAttackWave(ctx: SimCtx, units: Record<number, Unit>): void {
     ctx.enemies[id] = makeEnemy(id, kinds[i], tiles[i].x, tiles[i].y, null, ctx.tickCount);
   }
   // Warn the player and let them jump to the landing site (§16.1, §16.4).
-  const label = attackFlavourLabel(flavour, comp.dragon > 0);
+  const hasDragon = comp.dragon > 0;
+  const label = attackFlavourLabel(flavour, hasDragon);
   notify(ctx, "enemy", `${label} attacks the hamlet! Click to view.`, tiles[0] ?? origin);
+
+  return {
+    category: "attack",
+    flavour,
+    hasDragon,
+    count: kinds.length,
+    description: attackDescription(ctx, units, flavour, comp),
+  };
+}
+
+// One-line explanation of how the wave was scaled (§16.1), so the announcement
+// modal can tell the player *why* they face this many enemies. Each flavour keys
+// off a different hamlet stat; this re-reads that stat to phrase the reason.
+function attackDescription(
+  ctx: SimCtx,
+  units: Record<number, Unit>,
+  flavour: AttackFlavour,
+  comp: Record<EnemyKind, number>,
+): string {
+  switch (flavour) {
+    case "raidingParty": {
+      const workers = unitCount(units, "worker");
+      const base = `Goblins drawn by your ${workers} ${workers === 1 ? "worker" : "workers"}`;
+      return comp.goblinChief > 0
+        ? `${base}. A chief joins them, drawn by the swords you hold.`
+        : `${base}.`;
+    }
+    case "warband": {
+      const buildings =
+        buildingCount(ctx, "house") +
+        buildingCount(ctx, "barn") +
+        buildingCount(ctx, "smithy") +
+        buildingCount(ctx, "barracks");
+      let s = `A warband drawn by your ${buildings} ${buildings === 1 ? "building" : "buildings"}`;
+      if (comp.giantSpider > 0) s += `, with giant spiders nesting by your smithy and barracks`;
+      if (comp.goblinChief > 0) s += `, and a chief lured by your many mines`;
+      return `${s}.`;
+    }
+    case "plunder": {
+      const value = inventoryValue(ctx.resources);
+      const base = `Plunderers drawn by your stored goods, worth ${value}`;
+      return comp.goblinChief > 0
+        ? `${base}. Chiefs march for the gold in your stores.`
+        : `${base}.`;
+    }
+    case "goblinDragon": {
+      if (comp.dragon > 0) {
+        return `A dragon drawn by your hoard of ${ctx.resources.diamond} diamonds.`;
+      }
+      if (comp.goblinChief > 0) {
+        return `A goblin horde led by a chief, drawn by your ${ctx.resources.gold} gold.`;
+      }
+      return `A wandering goblin horde, hunting for easy pickings.`;
+    }
+  }
 }
 
 // A tile on a random map edge to spawn the wave from (§16.1). The actual landing
@@ -1727,7 +1783,10 @@ export function executeTax(
 export function acknowledgeEvent(ctx: SimCtx): boolean {
   const ev = ctx.activeEvent;
   if (!ev) return false;
-  if (ev.category === "misc" || (ev.category === "tax" && ev.demand <= 0)) {
+  // An attack's modal is purely an announcement (§16.1): dismissing it un-pauses
+  // the world so the already-spawned wave is fought live. A Misc modal and a
+  // zero-demand Tax likewise just acknowledge; a real Tax demand is paid instead.
+  if (ev.category === "attack" || ev.category === "misc" || (ev.category === "tax" && ev.demand <= 0)) {
     resolveEvent(ctx);
     return true;
   }

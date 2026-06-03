@@ -8,6 +8,7 @@ import {
   isWalkable,
   mountainTypeAt,
   tileAt,
+  townTiles,
 } from "../src/game/map.js";
 
 describe("map generation", () => {
@@ -59,6 +60,19 @@ describe("map generation", () => {
     expect(seen.has("forest")).toBe(true);
     expect(seen.has("water")).toBe(true);
     expect(seen.has("mountain")).toBe(true);
+  });
+
+  it("keeps the whole town flower as grass with no gathering state (req §18)", () => {
+    for (const seed of [1, 5, 123, 777]) {
+      const { map, town } = generateMap(seed);
+      for (const t of townTiles(town)) {
+        const idx = t.y * map.width + t.x;
+        expect(tileAt(map, t.x, t.y)).toBe("grass");
+        expect(map.forestWood[idx]).toBeUndefined();
+        expect(map.mineType[idx]).toBeUndefined();
+        expect(map.mountainType[idx]).toBeUndefined();
+      }
+    }
   });
 
   it("assigns a rock type to every mountain tile, deterministically", () => {

@@ -90,6 +90,31 @@ describe("hall interface — loading", () => {
   });
 });
 
+describe("hall interface — captains (req §6.1, §7.6)", () => {
+  it("lets a captain unload carried gold into the pool", () => {
+    let s = createInitialState(2024);
+    const id = firstUnitId(s);
+    const hall = mainHallId(s);
+    s = setUnit(s, id, { kind: "captain", x: HAMLET_CENTER.x, y: HAMLET_CENTER.y, carrying: { gold: 4 } });
+    s = update(s, [{ type: "hallStore", unitId: id, buildingId: hall, resource: "gold", amount: 4, toStorage: true }], 1);
+
+    expect(s.units[id].carrying.gold ?? 0).toBe(0);
+    expect(s.resources.gold).toBe(4);
+  });
+
+  it("refuses to load a captain with a resource it cannot carry", () => {
+    let s = createInitialState(2024);
+    const id = firstUnitId(s);
+    const hall = mainHallId(s);
+    s = { ...s, resources: { ...s.resources, wood: 10 } };
+    s = setUnit(s, id, { kind: "captain", x: HAMLET_CENTER.x, y: HAMLET_CENTER.y, carrying: {} });
+    s = update(s, [{ type: "hallStore", unitId: id, buildingId: hall, resource: "wood", amount: 5, toStorage: false }], 1);
+
+    expect(s.units[id].carrying.wood ?? 0).toBe(0);
+    expect(s.resources.wood).toBe(10);
+  });
+});
+
 describe("hall interface — guards", () => {
   it("ignores transfers when the unit is not on or beside the building", () => {
     let s = createInitialState(2024);

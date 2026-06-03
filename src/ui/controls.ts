@@ -403,10 +403,12 @@ export function createControls(opts: {
     // Enemy under the cursor → attack it (req §6.5).
     const enemy = enemyAtTile(s, tx, ty);
     if (enemy) return { type: "attack", unitIds: ids, targetEnemyId: enemy.id };
-    // The town tile → just walk there. On arrival (idle at town) the marketplace
-    // interface opens for trading (req §18). The "Sell at Town" / "Buy Horse"
-    // action-panel buttons remain as quick auto-trade shortcuts.
-    if (tx === s.town.x && ty === s.town.y) {
+    // Any town tile (the seven-hex flower) → just walk there. On arrival (idle
+    // at town) the marketplace interface opens for trading (req §18); trading
+    // works from any town tile, so a click on a neighbour must not fall through
+    // to a gather/move-home order. The "Sell at Town" / "Buy Horse" action-panel
+    // buttons remain as quick auto-trade shortcuts.
+    if (isTownTile(s.town, tx, ty)) {
       return { type: "moveUnits", unitIds: ids, tx, ty };
     }
     const t = tileAt(s.map, tx, ty);
